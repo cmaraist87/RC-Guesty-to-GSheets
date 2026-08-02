@@ -1,0 +1,27 @@
+# --- Secrets / credentials (NEVER commit) ---
+variables.env
+*.env
+.env
+credentials.json
+*_credentials.json
+service_account*.json
+token.json
+*.key
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# --- Data / PII (guest names, confirmation codes) ---
+# Ignore all CSVs by default; keep only the non-PII config lookup.
+*.csv
+!property_to_city.csv
+csvs/
+inputs/*.csv
+
+# --- Local scratch / archives / screenshots ---
+_archive/
+*.png
