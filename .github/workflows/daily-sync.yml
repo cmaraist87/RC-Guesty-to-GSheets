@@ -1,0 +1,80 @@
+name: Daily Guesty -> Sheet sync
+
+# Runs the Guesty pull + merge + Sheet write once a day at 4:00 AM America/Chicago.
+# GitHub cron is UTC-only and has no DST, so we fire at BOTH 09:00 and 10:00 UTC and
+# let a guard step run the sync only when it's actually 4 AM in Chicago:
+#   - CDT (summer, UTC-5): 09:00 UTC = 4 AM local  -> run ;  10:00 UTC = 5 AM -> skip
+#   - CST (winter, UTC-6): 09:00 UTC = 3 AM local  -> skip;  10:00 UTC = 4 AM -> run
+on:
+  schedule:
+    - cron: "0 9 * * *"
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (fetch + merge, but do NOT write to the sheet)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: guesty-sheet-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-sync.txt
+
+      - name: Guard - only proceed at 4 AM America/Chicago (manual runs always proceed)
+        id: guard
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch -> proceeding."
+          else
+            H=$(python -c "from datetime import datetime; from zoneinfo import ZoneInfo; print(datetime.now(ZoneInfo('America/Chicago')).hour)")
+            if [ "$H" = "4" ]; then
+              echo "run=yes" >> "$GITHUB_OUTPUT"
+              echo "Chicago hour=$H -> proceeding."
+            else
+              echo "run=no" >> "$GITHUB_OUTPUT"
+              echo "Chicago hour=$H (not 4) -> skipping this trigger."
+            fi
+          fi
+
+      - name: Run sync
+        if: steps.guard.outputs.run == 'yes'
+        env:
+          GUESTY_CLIENT_ID: ${{ secrets.GUESTY_CLIENT_ID }}
+          GUESTY_CLIENT_SECRET: ${{ secrets.GUESTY_CLIENT_SECRET }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
+          SYNC_LOOKBACK_DAYS: ${{ vars.SYNC_LOOKBACK_DAYS }}
+          SYNC_LOOKAHEAD_DAYS: ${{ vars.SYNC_LOOKAHEAD_DAYS }}
+          SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Running in DRY-RUN mode (sheet will NOT be modified)."
+            python sync.py --dry-run
+          else
+            python sync.py
+          fi
+
+      - name: Upload output snapshot
+        if: steps.guard.outputs.run == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-output
+          path: sync_output.csv
+          if-no-files-found: ignore

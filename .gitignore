@@ -15,6 +15,10 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
+# --- Sync automation local artifacts ---
+.guesty_token.json
+sync_output.csv
+
 # --- Data / PII (guest names, confirmation codes) ---
 # Ignore all CSVs by default; keep only the non-PII config lookup.
 *.csv

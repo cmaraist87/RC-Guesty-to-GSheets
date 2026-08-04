@@ -1,0 +1,6 @@
+# Dependencies for the automated daily Guesty -> Google Sheet sync (sync.py).
+# Kept separate from requirements.txt so the Gradio app install stays slim.
+pandas>=2.0.0
+requests>=2.31.0
+gspread>=6.0.0
+google-auth>=2.28.0
