@@ -7,6 +7,9 @@ credentials.json
 service_account*.json
 token.json
 *.key
+# Catch-all: no JSON belongs in this repo, and Google SA key files have
+# unpredictable names (e.g. guesty-sheet-sync-<hash>.json). Ignore them all.
+*.json
 
 # --- Python ---
 __pycache__/
