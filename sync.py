@@ -68,16 +68,23 @@ def load_config() -> dict:
             elif k == "SECRET_KEY":
                 os.environ.setdefault("GUESTY_CLIENT_SECRET", v)
 
+    # GitHub Actions passes unset repo variables as EMPTY strings (not missing), so
+    # os.environ.get(key, default) would return "" and skip the default. _env treats
+    # a blank/whitespace value as "not set" and falls back to the default.
+    def _env(key: str, default: str = "") -> str:
+        v = os.environ.get(key)
+        return v if (v is not None and v.strip() != "") else default
+
     return {
-        "client_id": os.environ.get("GUESTY_CLIENT_ID", ""),
-        "client_secret": os.environ.get("GUESTY_CLIENT_SECRET", ""),
-        "sheet_id": os.environ.get("SHEET_ID", ""),
-        "worksheet": os.environ.get("WORKSHEET_NAME") or None,
-        "sa_json": os.environ.get("GOOGLE_SA_JSON", ""),
-        "lookback": int(os.environ.get("SYNC_LOOKBACK_DAYS", "1")),
-        "lookahead": int(os.environ.get("SYNC_LOOKAHEAD_DAYS", "180")),
+        "client_id": _env("GUESTY_CLIENT_ID"),
+        "client_secret": _env("GUESTY_CLIENT_SECRET"),
+        "sheet_id": _env("SHEET_ID"),
+        "worksheet": _env("WORKSHEET_NAME") or None,
+        "sa_json": _env("GOOGLE_SA_JSON"),
+        "lookback": int(_env("SYNC_LOOKBACK_DAYS", "1")),
+        "lookahead": int(_env("SYNC_LOOKAHEAD_DAYS", "180")),
         "statuses": [s.strip() for s in
-                     os.environ.get("SYNC_STATUSES", "confirmed,reserved,checkedIn").split(",")
+                     _env("SYNC_STATUSES", "confirmed,reserved,checkedIn").split(",")
                      if s.strip()],
     }
 
