@@ -28,6 +28,11 @@ Nothing about the transformation logic changed — `processing.py` is reused as-
 
 ### 2. Google service account (so the job can write the Sheet)
 1. In the [Google Cloud Console](https://console.cloud.google.com/): create (or pick) a project.
+   - **If you hit `iam.disableServiceAccountKeyCreation`** (an org policy that blocks
+     downloadable keys): create the project with **Organization = "No organization"** at
+     <https://console.cloud.google.com/projectcreate> — the key-block policy doesn't apply
+     there. If "No organization" isn't selectable, your account is org-managed; use Workload
+     Identity Federation (keyless) instead and ask for the adapted setup.
 2. **APIs & Services → Enable APIs** → enable **Google Sheets API**.
 3. **APIs & Services → Credentials → Create credentials → Service account.** Name it e.g.
    `guesty-sheet-sync`. Create it (no roles needed).
