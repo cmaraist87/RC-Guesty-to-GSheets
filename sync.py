@@ -126,46 +126,112 @@ def describe_first(reservations: list[dict]) -> None:
     print()
 
 
+_SPANISH_MONTHS = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+
+def _spanish_tab(ym: str) -> str:
+    """'2026-08' -> 'Agosto 2026' (the tab name to create for that month)."""
+    y, m = int(ym[:4]), int(ym[5:7])
+    return f"{_SPANISH_MONTHS[m]} {y}"
+
+
 def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
     print(f"Adapter produced {len(df_co)} check-out rows, {len(df_ci)} check-in rows.")
 
     candidates = process_reservations(df_co, df_ci)
     print(f"Processing produced {len(candidates)} schedule rows.")
+    candidates = candidates.copy()
+    candidates["_ym"] = candidates["Date"].astype(str).str.strip().str[:7]  # 'YYYY-MM'
 
-    # Read current sheet (skip the live read in dry-run if no creds configured)
-    sheet = pd.DataFrame()
-    ws = None
-    if cfg["sheet_id"] and cfg["sa_json"]:
-        from sheets_client import get_worksheet, read_as_dataframe
-        ws = get_worksheet(cfg["sheet_id"], cfg["worksheet"], cfg["sa_json"])
-        sheet, header_raw = read_as_dataframe(ws)
-        print(f"Read current sheet: {len(sheet)} rows, {len(sheet.columns)} columns.")
-    else:
-        header_raw = list(candidates.columns)
-        print("No SHEET_ID/GOOGLE_SA_JSON set -> merging against an empty sheet.")
+    # No creds -> offline preview: merge everything against an empty sheet, write CSV.
+    if not (cfg["sheet_id"] and cfg["sa_json"]):
+        full, stats, changes = merge_reservations_into_sheet(
+            candidates.drop(columns=["_ym"]), pd.DataFrame())
+        full.to_csv(OUTPUT_CSV, index=False)
+        emit_change_report(stats, changes, will_write=False, label="no-sheet")
+        print("\nNo SHEET_ID/GOOGLE_SA_JSON set -> preview only (merged against empty sheet).")
+        return 0
 
-    full, stats, changes = merge_reservations_into_sheet(candidates, sheet)
+    from sheets_client import (open_spreadsheet, month_worksheets,
+                               read_as_dataframe, write_dataframe)
+    ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
+    month_ws = month_worksheets(ss)
+    if not month_ws:
+        print("ERROR: no month-named tabs (e.g. 'Agosto 2026') found in the workbook. "
+              "Tabs seen: " + ", ".join(w.title for w in ss.worksheets()), file=sys.stderr)
+        return 3
+    print(f"Found {len(month_ws)} monthly tab(s): "
+          + ", ".join(sorted(w.title for w in month_ws.values())))
 
-    full.to_csv(OUTPUT_CSV, index=False)
-    print(f"Wrote local snapshot -> {OUTPUT_CSV} ({len(full)} rows).")
+    grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0, "missing_city": 0}
+    skipped = []      # (ym, count): months with reservations but no matching tab
+    snapshots = []
+    n_written = 0
 
-    will_write = (not dry_run) and (ws is not None)
-    emit_change_report(stats, changes, will_write)
+    for ym, grp in candidates.groupby("_ym"):
+        y, mth = int(ym[:4]), int(ym[5:7])
+        cand = grp.drop(columns=["_ym"]).reset_index(drop=True)
+        ws = month_ws.get((y, mth))
+        if ws is None:
+            skipped.append((ym, len(cand)))
+            continue
+        sheet_df, header_raw = read_as_dataframe(ws)
+        try:
+            full, stats, changes = merge_reservations_into_sheet(cand, sheet_df)
+        except ValueError as e:
+            print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
+            continue
+        for k in grand:
+            grand[k] += stats.get(k, 0)
+        emit_change_report(stats, changes, will_write=(not dry_run), label=ws.title)
+        snap = full.copy(); snap.insert(0, "_tab", ws.title); snapshots.append(snap)
+        if not dry_run:
+            write_dataframe(ws, full, header_raw)
+            n_written += 1
+            print(f"   -> wrote {len(full)} rows to tab '{ws.title}'.")
+
+    if snapshots:
+        pd.concat(snapshots, ignore_index=True).to_csv(OUTPUT_CSV, index=False)
+        print(f"\nLocal snapshot of all tabs -> {OUTPUT_CSV}")
+
+    print("\n" + "#" * 60)
+    print("  GRAND TOTAL across monthly tabs")
+    print(f"    New {grand['new']} | Updated {grand['updated']} | Removed {grand['removed']} "
+          f"| Unchanged {grand['unchanged']} | Missing City {grand['missing_city']}")
+    if skipped:
+        print("  Months with reservations but NO matching tab (not written):")
+        for ym, n in sorted(skipped):
+            print(f"    {ym}: {n} rows  (create a tab named '{_spanish_tab(ym)}' to include them)")
+    print("#" * 60)
+
+    _write_grand_summary(grand, skipped, will_write=(not dry_run))
 
     if dry_run:
-        print("\nDRY RUN: the Google Sheet was NOT modified.")
-        return 0
-
-    if ws is None:
-        print("\nNo Sheet configured -> nothing written live. "
-              "Set SHEET_ID + GOOGLE_SA_JSON to enable the live write.")
-        return 0
-
-    from sheets_client import write_dataframe
-    write_dataframe(ws, full, header_raw)
-    print(f"\nWrote {len(full)} rows to the live sheet (checkbox formatting preserved).")
+        print("\nDRY RUN: no tabs were modified.")
+    else:
+        print(f"\nLIVE: wrote {n_written} monthly tab(s).")
     return 0
+
+
+def _write_grand_summary(grand: dict, skipped: list, will_write: bool) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as fh:
+            fh.write(f"\n## GRAND TOTAL — {'LIVE (tabs written)' if will_write else 'DRY RUN'}\n\n")
+            fh.write("| New | Updated | Removed | Unchanged | Missing City |\n")
+            fh.write("|----:|--------:|--------:|----------:|-------------:|\n")
+            fh.write(f"| {grand['new']} | {grand['updated']} | {grand['removed']} | "
+                     f"{grand['unchanged']} | {grand['missing_city']} |\n")
+            if skipped:
+                fh.write("\n**Months with reservations but no matching tab:**\n")
+                for ym, n in sorted(skipped):
+                    fh.write(f"- {ym}: {n} rows (create a tab named `{_spanish_tab(ym)}`)\n")
+    except OSError:
+        pass
 
 
 def _fmt_rows(records: list[dict], cols: list[str], cap: int = 40) -> str:
@@ -192,15 +258,16 @@ def _md_table(records: list[dict], cols: list[str], cap: int = 50) -> str:
     return "\n".join(out) + "\n"
 
 
-def emit_change_report(stats: dict, changes: dict, will_write: bool) -> None:
+def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str = "") -> None:
     """Print a human-readable 'what changed' summary and, on GitHub Actions, write
     a markdown panel to the run Summary page ($GITHUB_STEP_SUMMARY)."""
-    verb = "WRITTEN TO SHEET" if will_write else "PREVIEW ONLY (no write)"
+    verb = "WRITTEN TO TAB" if will_write else "PREVIEW ONLY (no write)"
+    tag = f"[{label}] " if label else ""
     cols = ["Date", "Property", "Guest", "Confirmation Code", "T/O"]
     rcols = ["Date", "Property", "Guest", "Confirmation Code"]
 
     print("\n" + "=" * 60)
-    print(f"  WHAT CHANGED  --  {verb}")
+    print(f"  {tag}WHAT CHANGED  --  {verb}")
     print("=" * 60)
     print(f"  New rows        : {stats['new']}")
     print(f"  Updated rows    : {stats['updated']}")
@@ -222,7 +289,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool) -> None:
     if summary_path:
         try:
             with open(summary_path, "a", encoding="utf-8") as fh:
-                fh.write(f"## Guesty → Sheet sync — {verb}\n\n")
+                fh.write(f"## {tag}Guesty → Sheet sync — {verb}\n\n")
                 fh.write(f"| New | Updated | Removed | Unchanged | Total | Missing City |\n")
                 fh.write(f"|----:|--------:|--------:|----------:|------:|-------------:|\n")
                 fh.write(f"| {stats['new']} | {stats['updated']} | {stats['removed']} | "

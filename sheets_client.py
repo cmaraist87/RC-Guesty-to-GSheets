@@ -38,15 +38,54 @@ def _load_credentials(sa_json: str):
     return Credentials.from_service_account_info(info, scopes=SCOPES)
 
 
-def get_worksheet(sheet_id: str, worksheet_name: str | None, sa_json: str):
-    """Open a worksheet by spreadsheet ID and tab name (or first tab if None)."""
+def open_spreadsheet(sheet_id: str, sa_json: str):
+    """Open the spreadsheet (workbook) by ID."""
     import gspread
 
     if not sheet_id:
         raise RuntimeError("Missing SHEET_ID (the spreadsheet's ID from its URL).")
     gc = gspread.authorize(_load_credentials(sa_json))
-    ss = gc.open_by_key(sheet_id)
+    return gc.open_by_key(sheet_id)
+
+
+def get_worksheet(sheet_id: str, worksheet_name: str | None, sa_json: str):
+    """Open a worksheet by spreadsheet ID and tab name (or first tab if None)."""
+    ss = open_spreadsheet(sheet_id, sa_json)
     return ss.worksheet(worksheet_name) if worksheet_name else ss.sheet1
+
+
+# Spanish month names -> month number (the schedule tabs are named e.g. "Julio 2026").
+# Includes English names too, so mixed naming still resolves.
+_MONTH_NAMES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def parse_month_title(title: str) -> tuple[int, int] | None:
+    """'Julio 2026' -> (2026, 7). Returns None for non-month tabs (guesty_res, pivots)."""
+    import re
+
+    m = re.match(r"^\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\.?\s+(\d{4})\s*$", str(title).strip())
+    if not m:
+        return None
+    mon = _MONTH_NAMES.get(m.group(1).lower())
+    if not mon:
+        return None
+    return (int(m.group(2)), mon)
+
+
+def month_worksheets(ss) -> dict:
+    """Map (year, month) -> worksheet for every month-named tab in the workbook."""
+    out = {}
+    for ws in ss.worksheets():
+        ym = parse_month_title(ws.title)
+        if ym:
+            out[ym] = ws
+    return out
 
 
 def _dedupe_headers(header: list[str]) -> list[str]:

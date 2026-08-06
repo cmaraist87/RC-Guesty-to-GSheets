@@ -53,11 +53,19 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `SHEET_ID` | the Sheet ID from step 2.7 |
 | `GOOGLE_SA_JSON` | paste the **entire contents** of the downloaded service-account JSON |
 
+> **The workbook uses monthly tabs.** The sync auto-detects tabs named like
+> `Julio 2026` / `Agosto 2026` (Spanish or English month + year) and routes each
+> reservation to its month's tab, merging into each one independently and preserving
+> that tab's checkboxes. Non-month tabs (`guesty_res`, pivot tables) are ignored. A
+> month with reservations but **no matching tab is skipped and reported** (create a
+> tab named e.g. `Septiembre 2026` to include it). `WORKSHEET_NAME` is therefore not
+> used for the monthly workflow.
+
 **Variables** (optional — sensible defaults apply if omitted):
 | Name | Default | Meaning |
 |------|---------|---------|
-| `SYNC_LIVE` | *(unset)* | **Safety toggle.** Scheduled 4 AM runs only write the sheet when this is exactly `true`. Until then they run as a dry-run. |
-| `WORKSHEET_NAME` | first tab | exact tab name to write |
+| `SYNC_LIVE` | *(unset)* | **Safety toggle.** Scheduled 4 AM runs only write when this is exactly `true`. Until then they run as a dry-run. |
+| `WORKSHEET_NAME` | *(unused)* | Ignored in the monthly-tab workflow; tabs are auto-detected by name. |
 | `SYNC_LOOKBACK_DAYS` | `1` | include check-outs from N days ago |
 | `SYNC_LOOKAHEAD_DAYS` | `180` | include check-ins up to N days ahead |
 | `SYNC_STATUSES` | `confirmed,reserved,checkedIn` | reservation statuses to include |
