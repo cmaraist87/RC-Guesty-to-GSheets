@@ -56,10 +56,22 @@ Repo → **Settings → Secrets and variables → Actions**.
 **Variables** (optional — sensible defaults apply if omitted):
 | Name | Default | Meaning |
 |------|---------|---------|
+| `SYNC_LIVE` | *(unset)* | **Safety toggle.** Scheduled 4 AM runs only write the sheet when this is exactly `true`. Until then they run as a dry-run. |
 | `WORKSHEET_NAME` | first tab | exact tab name to write |
 | `SYNC_LOOKBACK_DAYS` | `1` | include check-outs from N days ago |
 | `SYNC_LOOKAHEAD_DAYS` | `180` | include check-ins up to N days ahead |
 | `SYNC_STATUSES` | `confirmed,reserved,checkedIn` | reservation statuses to include |
+
+### Safety toggle — going live
+By default the automatic daily run **does not write your sheet** — it runs as a dry-run so you
+can watch a few mornings safely. When you're confident:
+
+1. Repo → **Settings → Secrets and variables → Actions → Variables → New repository variable**
+2. Name `SYNC_LIVE`, value `true`.
+
+From then on the 4 AM run writes the sheet for real. To pause live writes again, set it to
+anything else (e.g. `false`) or delete the variable. Manual runs are unaffected — they always
+follow the **dry_run** checkbox on the "Run workflow" form.
 
 ---
 

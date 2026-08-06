@@ -64,12 +64,26 @@ jobs:
           SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "Running in DRY-RUN mode (sheet will NOT be modified)."
-            python sync.py --dry-run
+          # Decide dry-run vs live:
+          #  - Manual run (workflow_dispatch): honour the dry_run checkbox.
+          #  - Scheduled run: LIVE only if the repo variable SYNC_LIVE == 'true'
+          #    (the safety toggle). Until you set it, the daily 4 AM run stays a
+          #    dry-run and never writes your sheet.
+          DRY=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
           else
-            python sync.py
+            if [ "${{ vars.SYNC_LIVE }}" != "true" ]; then
+              DRY="--dry-run"
+              echo "::notice::SYNC_LIVE is not 'true' -> scheduled run stays in DRY-RUN (safety toggle ON). Set repo variable SYNC_LIVE=true to enable live writes."
+            fi
           fi
+          if [ -n "$DRY" ]; then
+            echo "DRY-RUN mode: the Google Sheet will NOT be modified."
+          else
+            echo "LIVE mode: the Google Sheet WILL be updated."
+          fi
+          python sync.py $DRY
 
       - name: Upload output snapshot
         if: steps.guard.outputs.run == 'yes'
