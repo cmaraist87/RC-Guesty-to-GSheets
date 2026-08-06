@@ -145,11 +145,13 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         header_raw = list(candidates.columns)
         print("No SHEET_ID/GOOGLE_SA_JSON set -> merging against an empty sheet.")
 
-    full, stats = merge_reservations_into_sheet(candidates, sheet)
-    print("Merge stats:", json.dumps(stats))
+    full, stats, changes = merge_reservations_into_sheet(candidates, sheet)
 
     full.to_csv(OUTPUT_CSV, index=False)
     print(f"Wrote local snapshot -> {OUTPUT_CSV} ({len(full)} rows).")
+
+    will_write = (not dry_run) and (ws is not None)
+    emit_change_report(stats, changes, will_write)
 
     if dry_run:
         print("\nDRY RUN: the Google Sheet was NOT modified.")
@@ -162,8 +164,78 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
 
     from sheets_client import write_dataframe
     write_dataframe(ws, full, header_raw)
-    print(f"Wrote {len(full)} rows to the live sheet (checkbox formatting preserved).")
+    print(f"\nWrote {len(full)} rows to the live sheet (checkbox formatting preserved).")
     return 0
+
+
+def _fmt_rows(records: list[dict], cols: list[str], cap: int = 40) -> str:
+    if not records:
+        return "  (none)"
+    widths = {c: max(len(c), *(len(str(r.get(c, ""))) for r in records[:cap])) for c in cols}
+    head = "  " + "  ".join(c.ljust(widths[c]) for c in cols)
+    lines = [head, "  " + "  ".join("-" * widths[c] for c in cols)]
+    for r in records[:cap]:
+        lines.append("  " + "  ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+    if len(records) > cap:
+        lines.append(f"  ... and {len(records) - cap} more")
+    return "\n".join(lines)
+
+
+def _md_table(records: list[dict], cols: list[str], cap: int = 50) -> str:
+    if not records:
+        return "_none_\n"
+    out = ["| " + " | ".join(cols) + " |", "|" + "|".join("---" for _ in cols) + "|"]
+    for r in records[:cap]:
+        out.append("| " + " | ".join(str(r.get(c, "")).replace("|", "\\|") for c in cols) + " |")
+    if len(records) > cap:
+        out.append(f"\n_…and {len(records) - cap} more_")
+    return "\n".join(out) + "\n"
+
+
+def emit_change_report(stats: dict, changes: dict, will_write: bool) -> None:
+    """Print a human-readable 'what changed' summary and, on GitHub Actions, write
+    a markdown panel to the run Summary page ($GITHUB_STEP_SUMMARY)."""
+    verb = "WRITTEN TO SHEET" if will_write else "PREVIEW ONLY (no write)"
+    cols = ["Date", "Property", "Guest", "Confirmation Code", "T/O"]
+    rcols = ["Date", "Property", "Guest", "Confirmation Code"]
+
+    print("\n" + "=" * 60)
+    print(f"  WHAT CHANGED  --  {verb}")
+    print("=" * 60)
+    print(f"  New rows        : {stats['new']}")
+    print(f"  Updated rows    : {stats['updated']}")
+    print(f"  Removed rows    : {stats['removed']}")
+    print(f"  Unchanged       : {stats['unchanged']}")
+    print(f"  Total in sheet  : {stats['total_rows']}")
+    print(f"  Missing City    : {stats['missing_city']}")
+    print("\n  --- New ---\n" + _fmt_rows(changes["new"], cols))
+    print("\n  --- Updated (old row dropped, checkbox carried over) ---\n"
+          + _fmt_rows(changes["updated"], cols))
+    print("\n  --- Removed (superseded) ---\n" + _fmt_rows(changes["removed"], rcols))
+    if changes["missing_city_properties"]:
+        print("\n  --- Properties with no City (add to property_to_city.csv) ---")
+        for p in changes["missing_city_properties"][:40]:
+            print(f"    {p}")
+    print("=" * 60)
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(f"## Guesty → Sheet sync — {verb}\n\n")
+                fh.write(f"| New | Updated | Removed | Unchanged | Total | Missing City |\n")
+                fh.write(f"|----:|--------:|--------:|----------:|------:|-------------:|\n")
+                fh.write(f"| {stats['new']} | {stats['updated']} | {stats['removed']} | "
+                         f"{stats['unchanged']} | {stats['total_rows']} | {stats['missing_city']} |\n\n")
+                fh.write("### New\n" + _md_table(changes["new"], cols))
+                fh.write("\n### Updated\n" + _md_table(changes["updated"], cols))
+                fh.write("\n### Removed (superseded)\n" + _md_table(changes["removed"], rcols))
+                if changes["missing_city_properties"]:
+                    fh.write("\n### Properties missing City (add to property_to_city.csv)\n")
+                    for p in changes["missing_city_properties"][:50]:
+                        fh.write(f"- {p}\n")
+        except OSError:
+            pass
 
 
 def main(argv=None) -> int:

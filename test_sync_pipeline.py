@@ -82,8 +82,12 @@ def test_adapter_then_processing_then_merge():
         "T/O": "", "Adjustments": "",
     }], columns=sheet_cols).astype(str)
 
-    full, stats = merge_reservations_into_sheet(out, existing)
+    full, stats, changes = merge_reservations_into_sheet(out, existing)
     print("merge stats:", stats)
+    assert set(changes.keys()) == {"new", "updated", "removed", "missing_city_properties"}
+    assert len(changes["new"]) == stats["new"]
+    assert all({"Date", "Property", "Guest", "Confirmation Code", "T/O"} <= set(r)
+               for r in changes["new"])
     # The Jane Doe checkout row already existed unchanged? It becomes an UPDATE
     # because in `out` that (Property, Date) now also carries a check-in (turnover),
     # so its checkbox tick must carry over.

@@ -141,17 +141,29 @@ def merge_reservations_into_sheet(
             "data": r,
         })
 
+    def _rec(row) -> dict:
+        return {
+            "Date": _date_key(row.get("Date", "")),
+            "Property": str(row.get("Property", "")).strip(),
+            "Guest": str(row.get("Guest", "")).strip(),
+            "Confirmation Code": str(row.get("Confirmation Code", "")).strip(),
+            "T/O": str(row.get("T/O", "")).strip(),
+        }
+
     keep_idx, carry_rows, delete_rows = [], [], []
+    new_records, updated_records = [], []
     n_new = n_updated = n_unchanged = 0
     for j, c in candidates.iterrows():
         key = (str(c["Property"]).strip(), _date_key(c["Date"]))
         matches = existing_by_key.get(key)
         if not matches:
-            keep_idx.append(j); carry_rows.append(None); n_new += 1; continue
+            keep_idx.append(j); carry_rows.append(None); n_new += 1
+            new_records.append(_rec(c)); continue
         csig = sig(c, "Check-out Time", "Check-in Time")
         if any(m["sig"] == csig for m in matches):
             n_unchanged += 1; continue
         keep_idx.append(j); carry_rows.append(matches[0]["data"]); n_updated += 1
+        updated_records.append(_rec(c))
         delete_rows.extend(matches)
 
     new_rows = candidates.loc[keep_idx].reset_index(drop=True)
@@ -197,6 +209,24 @@ def merge_reservations_into_sheet(
     missing_city = int(
         (to_append.get("City", pd.Series(dtype=str)).astype(str).str.strip() == "").sum()
     )
+    removed_records = [{
+        "Date": _date_key(m["data"].get("Date", "")),
+        "Property": str(m["data"].get("Property", "")).strip(),
+        "Guest": str(m["data"].get("Guest", "")).strip(),
+        "Confirmation Code": str(m["data"].get("Confirmation Code", "")).strip(),
+        "sheet_row": m["row"],
+    } for m in delete_rows]
+
+    # Which new/updated rows still have no City (property not in property_to_city.csv
+    # / the existing sheet). Only rows whose City is actually blank.
+    missing_city_props = sorted({
+        str(to_append.iloc[i].get("Property", "")).strip()
+        for i in range(len(to_append))
+        if "City" in to_append.columns
+        and str(to_append.iloc[i].get("City", "")).strip() == ""
+        and str(to_append.iloc[i].get("Property", "")).strip() != ""
+    })
+
     stats = {
         "existing_rows": len(sheet),
         "new": n_new,
@@ -206,4 +236,10 @@ def merge_reservations_into_sheet(
         "missing_city": missing_city,
         "total_rows": len(full),
     }
-    return full, stats
+    changes = {
+        "new": new_records,
+        "updated": updated_records,
+        "removed": removed_records,
+        "missing_city_properties": missing_city_props,
+    }
+    return full, stats, changes
