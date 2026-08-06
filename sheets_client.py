@@ -88,6 +88,20 @@ def month_worksheets(ss) -> dict:
     return out
 
 
+def create_month_tab(ss, template_title: str, new_title: str):
+    """
+    Create a new month tab by duplicating `template_title` (which copies its checkbox
+    data-validation and all formatting), then value-clearing the copied data rows so the
+    new tab starts empty but keeps the header row + checkbox formatting. Returns the new ws.
+    """
+    src = ss.worksheet(template_title)
+    new_ws = ss.duplicate_sheet(source_sheet_id=src.id, new_sheet_name=new_title)
+    n_rows, n_cols = new_ws.row_count, new_ws.col_count
+    if n_rows > 1:  # keep row 1 (header) + formatting; wipe the copied data values
+        new_ws.batch_clear([f"A2:{_col_letter(n_cols)}{n_rows}"])
+    return new_ws
+
+
 def _dedupe_headers(header: list[str]) -> list[str]:
     """Mimic pandas read_csv: blanks -> 'Unnamed: i', duplicates -> name, name.1, ..."""
     out, seen = [], {}

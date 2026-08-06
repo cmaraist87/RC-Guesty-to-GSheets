@@ -21,6 +21,9 @@ class FakeWS:
         self._values = values
         self.updated = None
         self.cleared = []
+        self.id = id(self)
+        self.row_count = max(len(values), 1000)
+        self.col_count = len(values[0]) if values else 0
 
     def get_all_values(self):
         return self._values
@@ -39,6 +42,18 @@ class FakeSS:
     def worksheets(self):
         return self._wss
 
+    def worksheet(self, title):
+        return next(w for w in self._wss if w.title == title)
+
+    def duplicate_sheet(self, source_sheet_id=None, new_sheet_name=None):
+        src = next(w for w in self._wss if id(w) == source_sheet_id or w.title == source_sheet_id)
+        # duplicate copies header + data + formatting
+        new = FakeWS(new_sheet_name, [list(r) for r in src._values])
+        new.row_count = max(len(new._values), 1000)
+        new.col_count = len(HEADER)
+        self._wss.append(new)
+        return new
+
 
 def test_parse_titles():
     assert sheets_client.parse_month_title("Julio 2026") == (2026, 7)
@@ -48,7 +63,7 @@ def test_parse_titles():
     print("OK parse_month_title")
 
 
-def test_routing(monkeypatched_ss):
+def test_routing(fake, existing):
     # Two reservations: one lands in August, one spans July->September.
     reservations = [
         {"confirmationCode": "HA-AUG1", "status": "confirmed", "guest": {"fullName": "Aug Guest"},
@@ -58,25 +73,27 @@ def test_routing(monkeypatched_ss):
          "listing": {"nickname": "3223 Canal"},
          "checkInDateLocalized": "2026-07-27", "checkOutDateLocalized": "2026-09-03"},
     ]
-    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None,
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
            "client_id": "x", "client_secret": "y",
            "lookback": 1, "lookahead": 180, "statuses": ["confirmed"]}
 
     rc = sync.run(dry_run=False, reservations=reservations, cfg=cfg)
     assert rc == 0, rc
 
-    ago = monkeypatched_ss[("2026-08")]
-    jul = monkeypatched_ss[("2026-07")]
-    res_tab = monkeypatched_ss[("guesty")]
+    ago, jul, res_tab = existing["2026-08"], existing["2026-07"], existing["guesty"]
 
     # August + July tabs were written; the non-month tab was never touched.
     assert ago.updated is not None, "August tab should have been written"
     assert jul.updated is not None, "July tab should have been written"
     assert res_tab.updated is None, "guesty_res tab must NOT be written"
-    # August write preserves the 16-column layout / header
     assert ago.updated[0] == HEADER, ago.updated[0]
-    # September reservation event has no tab -> reported as skipped (not written)
-    print("OK routing: Aug/Jul written, guesty_res untouched, Sept skipped")
+
+    # September event had no tab -> auto-created 'Septiembre 2026' and written.
+    sept = next((w for w in fake._wss if w.title == "Septiembre 2026"), None)
+    assert sept is not None, "Septiembre 2026 should have been auto-created"
+    assert sept.updated is not None, "auto-created Sept tab should have been written"
+    assert sept.updated[0] == HEADER, "auto-created tab keeps the template header"
+    print("OK routing: Aug/Jul written, guesty_res untouched, Sept auto-created + written")
 
 
 if __name__ == "__main__":
@@ -95,7 +112,7 @@ if __name__ == "__main__":
     orig = sheets_client.open_spreadsheet
     sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
     try:
-        test_routing({"2026-08": ago, "2026-07": jul, "guesty": res})
+        test_routing(fake, {"2026-08": ago, "2026-07": jul, "guesty": res})
     finally:
         sheets_client.open_spreadsheet = orig
 

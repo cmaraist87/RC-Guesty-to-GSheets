@@ -56,15 +56,16 @@ Repo → **Settings → Secrets and variables → Actions**.
 > **The workbook uses monthly tabs.** The sync auto-detects tabs named like
 > `Julio 2026` / `Agosto 2026` (Spanish or English month + year) and routes each
 > reservation to its month's tab, merging into each one independently and preserving
-> that tab's checkboxes. Non-month tabs (`guesty_res`, pivot tables) are ignored. A
-> month with reservations but **no matching tab is skipped and reported** (create a
-> tab named e.g. `Septiembre 2026` to include it). `WORKSHEET_NAME` is therefore not
-> used for the monthly workflow.
+> that tab's checkboxes. Non-month tabs (`guesty_res`, pivot tables) are ignored.
+> **Missing month tabs are auto-created** on a live run by duplicating a template tab
+> (so checkbox formatting carries over), then filled. On a dry-run they're only
+> reported. `WORKSHEET_NAME` is not used for the monthly workflow.
 
 **Variables** (optional — sensible defaults apply if omitted):
 | Name | Default | Meaning |
 |------|---------|---------|
 | `SYNC_LIVE` | *(unset)* | **Safety toggle.** Scheduled 4 AM runs only write when this is exactly `true`. Until then they run as a dry-run. |
+| `TEMPLATE_TAB` | latest month tab | Which tab to duplicate when auto-creating a missing month (its checkbox formatting is the template). Set this if you keep a dedicated blank template tab. |
 | `WORKSHEET_NAME` | *(unused)* | Ignored in the monthly-tab workflow; tabs are auto-detected by name. |
 | `SYNC_LOOKBACK_DAYS` | `1` | include check-outs from N days ago |
 | `SYNC_LOOKAHEAD_DAYS` | `180` | include check-ins up to N days ahead |

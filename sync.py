@@ -80,6 +80,7 @@ def load_config() -> dict:
         "client_secret": _env("GUESTY_CLIENT_SECRET"),
         "sheet_id": _env("SHEET_ID"),
         "worksheet": _env("WORKSHEET_NAME") or None,
+        "template_tab": _env("TEMPLATE_TAB") or None,
         "sa_json": _env("GOOGLE_SA_JSON"),
         "lookback": int(_env("SYNC_LOOKBACK_DAYS", "1")),
         "lookahead": int(_env("SYNC_LOOKAHEAD_DAYS", "180")),
@@ -155,7 +156,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         return 0
 
     from sheets_client import (open_spreadsheet, month_worksheets,
-                               read_as_dataframe, write_dataframe)
+                               read_as_dataframe, write_dataframe, create_month_tab)
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
     if not month_ws:
@@ -165,8 +166,13 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     print(f"Found {len(month_ws)} monthly tab(s): "
           + ", ".join(sorted(w.title for w in month_ws.values())))
 
+    # Template tab to duplicate when auto-creating a missing month (formatting/checkboxes).
+    template_title = cfg["template_tab"] or month_ws[max(month_ws.keys())].title
+    print(f"Template tab for auto-creating missing months: '{template_title}'")
+
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0, "missing_city": 0}
-    skipped = []      # (ym, count): months with reservations but no matching tab
+    skipped = []      # (ym, count): months with data but no tab (dry-run only)
+    created = []      # titles of tabs auto-created this run
     snapshots = []
     n_written = 0
 
@@ -175,8 +181,18 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         cand = grp.drop(columns=["_ym"]).reset_index(drop=True)
         ws = month_ws.get((y, mth))
         if ws is None:
-            skipped.append((ym, len(cand)))
-            continue
+            if dry_run:
+                skipped.append((ym, len(cand)))
+                continue
+            new_title = _spanish_tab(ym)
+            try:
+                ws = create_month_tab(ss, template_title, new_title)
+                created.append(new_title)
+                print(f"\nAuto-created tab '{new_title}' from template '{template_title}'.")
+            except Exception as e:  # noqa: BLE001 - report + skip this month, keep going
+                print(f"\n!! Could not auto-create tab '{new_title}': {e}")
+                skipped.append((ym, len(cand)))
+                continue
         sheet_df, header_raw = read_as_dataframe(ws)
         try:
             full, stats, changes = merge_reservations_into_sheet(cand, sheet_df)
@@ -200,22 +216,26 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     print("  GRAND TOTAL across monthly tabs")
     print(f"    New {grand['new']} | Updated {grand['updated']} | Removed {grand['removed']} "
           f"| Unchanged {grand['unchanged']} | Missing City {grand['missing_city']}")
+    if created:
+        print("  Auto-created tabs: " + ", ".join(created))
     if skipped:
-        print("  Months with reservations but NO matching tab (not written):")
+        print("  Months with reservations but NO tab yet "
+              "(will be auto-created on the live run):")
         for ym, n in sorted(skipped):
-            print(f"    {ym}: {n} rows  (create a tab named '{_spanish_tab(ym)}' to include them)")
+            print(f"    {ym}: {n} rows  ->  '{_spanish_tab(ym)}'")
     print("#" * 60)
 
-    _write_grand_summary(grand, skipped, will_write=(not dry_run))
+    _write_grand_summary(grand, skipped, created, will_write=(not dry_run))
 
     if dry_run:
-        print("\nDRY RUN: no tabs were modified.")
+        print("\nDRY RUN: no tabs were created or modified.")
     else:
-        print(f"\nLIVE: wrote {n_written} monthly tab(s).")
+        print(f"\nLIVE: wrote {n_written} monthly tab(s)"
+              + (f", auto-created {len(created)} new tab(s)." if created else "."))
     return 0
 
 
-def _write_grand_summary(grand: dict, skipped: list, will_write: bool) -> None:
+def _write_grand_summary(grand: dict, skipped: list, created: list, will_write: bool) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -226,10 +246,13 @@ def _write_grand_summary(grand: dict, skipped: list, will_write: bool) -> None:
             fh.write("|----:|--------:|--------:|----------:|-------------:|\n")
             fh.write(f"| {grand['new']} | {grand['updated']} | {grand['removed']} | "
                      f"{grand['unchanged']} | {grand['missing_city']} |\n")
+            if created:
+                fh.write("\n**Auto-created tabs:** " + ", ".join(f"`{t}`" for t in created) + "\n")
             if skipped:
-                fh.write("\n**Months with reservations but no matching tab:**\n")
+                fh.write("\n**Months with reservations but no tab yet "
+                         "(auto-created on the live run):**\n")
                 for ym, n in sorted(skipped):
-                    fh.write(f"- {ym}: {n} rows (create a tab named `{_spanish_tab(ym)}`)\n")
+                    fh.write(f"- {ym}: {n} rows -> `{_spanish_tab(ym)}`\n")
     except OSError:
         pass
 
