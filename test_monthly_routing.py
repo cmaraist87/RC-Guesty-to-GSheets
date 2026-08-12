@@ -62,6 +62,25 @@ class FakeSS:
         return new
 
 
+def test_tab_cancel_window():
+    """The legacy 'Julio 2026' tab holds rows from every month. Judged against the
+    whole fetch range they all look cancelled -- scope to the tab's own month."""
+    coverage = ("2026-08-11", "2027-02-08")
+    # July is entirely behind the coverage window -> no cancellation pass at all.
+    assert sync.tab_cancel_window(coverage, "2026-07") is None
+    # The current month starts at the coverage floor, not the 1st.
+    assert sync.tab_cancel_window(coverage, "2026-08") == ("2026-08-11", "2026-08-31")
+    # A whole month inside the window keeps its own bounds (30- and 31-day months).
+    assert sync.tab_cancel_window(coverage, "2026-09") == ("2026-09-01", "2026-09-30")
+    assert sync.tab_cancel_window(coverage, "2026-12") == ("2026-12-01", "2026-12-31")
+    # The far edge is clipped by the coverage ceiling.
+    assert sync.tab_cancel_window(coverage, "2027-02") == ("2027-02-01", "2027-02-08")
+    # Beyond the window entirely, and the disabled case.
+    assert sync.tab_cancel_window(coverage, "2027-03") is None
+    assert sync.tab_cancel_window(None, "2026-09") is None
+    print("OK tab_cancel_window: scoped per month, clipped to coverage")
+
+
 def test_parse_titles():
     assert sheets_client.parse_month_title("Julio 2026") == (2026, 7)
     assert sheets_client.parse_month_title("Agosto 2026") == (2026, 8)
@@ -181,6 +200,7 @@ def test_apply_row_marks_requests():
 
 if __name__ == "__main__":
     test_parse_titles()
+    test_tab_cancel_window()
     test_read_row_marks()
     test_apply_row_marks_requests()
 

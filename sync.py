@@ -103,6 +103,26 @@ def coverage_window(cfg: dict) -> tuple[str, str]:
             (today + timedelta(days=cfg["lookahead"])).isoformat())
 
 
+def tab_cancel_window(coverage: tuple[str, str] | None, ym: str) -> tuple[str, str] | None:
+    """
+    Narrow the coverage window to the tab's OWN month.
+
+    A month tab is only authoritative for its own month. `Julio 2026` predates
+    monthly routing and still holds ~790 rows dated August onwards; judged against
+    the full coverage window every one of them looks cancelled, because those
+    reservations now live in their own tabs. Scoping to the month means such strays
+    are simply ignored. Returns None when the two ranges don't overlap.
+    """
+    if not coverage:
+        return None
+    import calendar
+
+    y, m = int(ym[:4]), int(ym[5:7])
+    lo = max(coverage[0], f"{ym}-01")
+    hi = min(coverage[1], f"{ym}-{calendar.monthrange(y, m)[1]:02d}")
+    return (lo, hi) if lo <= hi else None
+
+
 def build_filters(cfg: dict) -> list[dict]:
     start, end = coverage_window(cfg)
     return [
@@ -183,8 +203,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
 
     cancel_window = coverage_window(cfg) if cfg.get("mark_cancelled", True) else None
     if cancel_window:
-        print(f"Cancellation detection ON for dates {cancel_window[0]} .. {cancel_window[1]} "
-              "(rows outside that range are never struck).")
+        print(f"Cancellation detection ON for dates {cancel_window[0]} .. {cancel_window[1]}, "
+              "further narrowed to each tab's own month (rows outside are never struck).")
     else:
         print("Cancellation detection OFF (SYNC_MARK_CANCELLED).")
 
@@ -217,7 +237,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         try:
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df,
-                cancel_window=cancel_window,
+                cancel_window=tab_cancel_window(cancel_window, ym),
                 struck_rows=prior_struck,
             )
         except ValueError as e:
