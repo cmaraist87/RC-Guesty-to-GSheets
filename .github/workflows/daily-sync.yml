@@ -59,9 +59,11 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
+          TEMPLATE_TAB: ${{ vars.TEMPLATE_TAB }}
           SYNC_LOOKBACK_DAYS: ${{ vars.SYNC_LOOKBACK_DAYS }}
           SYNC_LOOKAHEAD_DAYS: ${{ vars.SYNC_LOOKAHEAD_DAYS }}
           SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
+          SYNC_MARK_CANCELLED: ${{ vars.SYNC_MARK_CANCELLED }}
         shell: bash
         run: |
           # Decide dry-run vs live:
