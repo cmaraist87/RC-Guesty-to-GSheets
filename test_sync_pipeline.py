@@ -84,7 +84,9 @@ def test_adapter_then_processing_then_merge():
 
     full, stats, changes = merge_reservations_into_sheet(out, existing)
     print("merge stats:", stats)
-    assert set(changes.keys()) == {"new", "updated", "removed", "missing_city_properties"}
+    assert set(changes.keys()) == {"new", "updated", "removed", "cancelled",
+                                   "missing_city_properties", "row_flags",
+                                   "kept_positions"}
     assert len(changes["new"]) == stats["new"]
     assert all({"Date", "Property", "Guest", "Confirmation Code", "T/O"} <= set(r)
                for r in changes["new"])
@@ -95,10 +97,141 @@ def test_adapter_then_processing_then_merge():
     assert stats["new"] >= 1
     # Preserved a checkbox tick somewhere (carried or existing verbatim)
     assert (full[["."]].apply(lambda s: s.str.upper() == "TRUE").any().any())
+    assert len(changes["row_flags"]) == len(full)
     print("OK: adapter -> processing -> merge end to end")
+
+
+# The live sheet's real layout: four checkbox columns interleaved with the data.
+LIVE_HEADER = ["City", "Day", "Date", "Confirmation Code", "Guest", "assigned",
+               "Property", "Verified", "Check out - Time", "OUT", "Check-in Time",
+               "IN", "T/O", "Adjustments", "Unnamed: 14", "Unnamed: 15"]
+
+CANDIDATE = {
+    "City": "", "Day": "Sunday", "Date": "2026-11-01",
+    "Confirmation Code": "HM2HTCNFT5", "Guest": "James Cull",
+    "Property": "1022 Mandeville", "Check-out Time": "11:00 AM",
+    "Check-in Time": "", "T/O": "", "Adjustments": "",
+}
+
+
+def test_empty_tab_keeps_the_sheets_column_layout():
+    """A freshly auto-created month tab has a header but zero data rows. Its layout
+    must still drive the output -- otherwise every column from `assigned` on shifts."""
+    empty_tab = pd.DataFrame(columns=LIVE_HEADER)
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), empty_tab)
+
+    assert list(full.columns) == LIVE_HEADER, list(full.columns)
+    row = full.iloc[0]
+    assert row["Property"] == "1022 Mandeville", row.to_dict()
+    assert row["Check out - Time"] == "11:00 AM", row.to_dict()
+    assert row["Guest"] == "James Cull"
+    assert row["City"] == "New Orleans"  # resolved from property_to_city.csv
+    # Checkbox columns are recognised by header name when there's no data to sample.
+    for cb in ("assigned", "Verified", "OUT", "IN"):
+        assert row[cb] == "FALSE", f"{cb} should default to an unticked checkbox"
+    assert row["Unnamed: 14"] == "" and row["Unnamed: 15"] == ""
+    assert changes["row_flags"] == ["new"], changes["row_flags"]
+    print("OK: empty tab keeps the sheet's 16-column layout, checkboxes default FALSE")
+
+
+def test_cancelled_rows_are_struck_not_deleted():
+    existing = pd.DataFrame([
+        # still live -> untouched
+        dict(zip(LIVE_HEADER, ["New Orleans", "Sunday", "2026-11-01", "HM2HTCNFT5",
+                               "James Cull", "TRUE", "1022 Mandeville", "FALSE",
+                               "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""])),
+        # gone from Guesty, inside the window -> cancelled
+        dict(zip(LIVE_HEADER, ["Savannah", "Sunday", "2026-11-01", "HMGONE0001",
+                               "Ghost Booking", "FALSE", "6 Lake", "FALSE",
+                               "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""])),
+        # outside the coverage window -> must NOT be struck
+        dict(zip(LIVE_HEADER, ["Austin", "Wednesday", "2027-06-02", "HMFUTURE01",
+                               "Far Future", "FALSE", "6504 Porter A", "FALSE",
+                               "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""])),
+    ], columns=LIVE_HEADER).astype(str)
+
+    window = ("2026-10-01", "2026-12-31")
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing, cancel_window=window)
+
+    assert stats["cancelled"] == 1, stats
+    assert stats["unchanged"] == 1, stats
+    assert changes["cancelled"][0]["Confirmation Code"] == "HMGONE0001"
+    # Struck rows stay in the sheet; nothing is deleted.
+    assert len(full) == 3, full.to_string()
+    assert changes["row_flags"] == ["", "cancelled", ""], changes["row_flags"]
+
+    # Second run: the row is already struck, so it isn't re-reported, and its ticks
+    # no longer match a re-booking of the same property/date.
+    full2, stats2, changes2 = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing, cancel_window=window, struck_rows={1})
+    assert stats2["cancelled"] == 0, stats2
+    assert changes2["row_flags"] == ["", "struck", ""], changes2["row_flags"]
+    print("OK: cancellations struck once, kept in place, window-bounded")
+
+
+def test_rebooking_over_a_struck_row_lands_as_new():
+    struck = pd.DataFrame([
+        dict(zip(LIVE_HEADER, ["Savannah", "Sunday", "2026-11-01", "HMOLD00001",
+                               "Cancelled Guest", "FALSE", "6 Lake", "FALSE",
+                               "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""])),
+    ], columns=LIVE_HEADER).astype(str)
+    rebooked = dict(CANDIDATE, Property="6 Lake", Guest="New Guest",
+                    **{"Confirmation Code": "HMNEW00001"})
+
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([rebooked]), struck,
+        cancel_window=("2026-10-01", "2026-12-31"), struck_rows={0})
+
+    assert stats["new"] == 1 and stats["updated"] == 0, stats
+    assert changes["row_flags"] == ["struck", "new"], changes["row_flags"]
+    assert full.iloc[1]["Guest"] == "New Guest"
+    print("OK: re-booking a struck property/date appends a new highlighted row")
+
+
+def test_cancel_guard_blocks_a_short_fetch():
+    """If the Guesty fetch comes back short, a whole month looks cancelled. Don't
+    strike it -- report the anomaly and leave the tab alone."""
+    rows = [dict(zip(LIVE_HEADER,
+                     ["New Orleans", "Sunday", "2026-11-01", f"HM{i:08d}",
+                      f"Guest {i}", "FALSE", f"{i} Somewhere", "FALSE",
+                      "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""]))
+            for i in range(30)]
+    existing = pd.DataFrame(rows, columns=LIVE_HEADER).astype(str)
+
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing, cancel_window=("2026-10-01", "2026-12-31"))
+
+    assert stats["cancelled"] == 0, stats
+    assert stats["cancel_guard_tripped"], stats
+    assert set(changes["row_flags"]) == {"", "new"}, set(changes["row_flags"])
+    print("OK: cancel guard blocks a mass strike -> " + stats["cancel_guard_tripped"])
+
+
+def test_canonical_property_spelling_is_not_a_cancellation():
+    existing = pd.DataFrame([
+        dict(zip(LIVE_HEADER, ["Savannah", "Sunday", "2026-11-01", "HMDUFFY001",
+                               "Sean Finlay", "FALSE", "105 E Duffy1&2&CH", "FALSE",
+                               "11:00 AM", "FALSE", "", "FALSE", "", "", "", ""])),
+    ], columns=LIVE_HEADER).astype(str)
+    # Same unit, different spelling of the same name.
+    cand = dict(CANDIDATE, Property="105 Duffy 1&2 CH", Guest="Sean Finlay",
+                **{"Confirmation Code": "HMDUFFY001"})
+
+    _, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([cand]), existing, cancel_window=("2026-10-01", "2026-12-31"))
+
+    assert stats["cancelled"] == 0, changes["cancelled"]
+    print("OK: cosmetic property-name drift is not read as a cancellation")
 
 
 if __name__ == "__main__":
     test_requested_fields_nonempty()
     test_adapter_then_processing_then_merge()
+    test_empty_tab_keeps_the_sheets_column_layout()
+    test_cancelled_rows_are_struck_not_deleted()
+    test_rebooking_over_a_struck_row_lands_as_new()
+    test_cancel_guard_blocks_a_short_fetch()
+    test_canonical_property_spelling_is_not_a_cancellation()
     print("\nALL TESTS PASSED")

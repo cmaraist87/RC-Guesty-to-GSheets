@@ -8,10 +8,23 @@ Given:
   sheet      : DataFrame of the CURRENT sheet (all string, .fillna("")), whatever
                column layout it has (checkbox/spacer columns included)
 Returns:
-  full  : the FULL corrected sheet, aligned to `sheet`'s exact columns --
-          existing rows kept verbatim, superseded rows dropped, new/updated added,
-          checkbox ticks preserved (carried over on updates, FALSE for new).
-  stats : dict of counts (new / updated / unchanged / removed / missing_city).
+  full    : the FULL corrected sheet, aligned to `sheet`'s exact columns --
+            existing rows kept verbatim, superseded rows dropped, new/updated added,
+            checkbox ticks preserved (carried over on updates, FALSE for new).
+  stats   : dict of counts (new / updated / unchanged / removed / cancelled / missing_city).
+  changes : the records behind those counts, plus the two lists the caller needs to
+            paint the sheet -- `row_flags` (one flag per row of `full`) and
+            `kept_positions` (where each carried-over row sat in the old sheet).
+
+Row flags drive the visual diff the ops team asked for:
+    "new" / "updated"  -> highlighted (this run wrote the row)
+    "cancelled"        -> struck through for the first time this run
+    "struck"           -> already struck by an earlier run; leave as is
+    ""                 -> untouched
+
+IMPORTANT: `sheet` must keep its real header even when it has no data rows (a
+freshly auto-created month tab). Substituting the pipeline's own column names
+there is what shifted every column from `assigned` onward by one.
 
 Writing `full` starting at cell A1 (via paste or the Sheets API) preserves the
 sheet's checkbox data-validation because only cell VALUES are replaced.
@@ -27,6 +40,11 @@ import pandas as pd
 from processing import _canonical_key
 
 SIGNATURE_COLS = {"Confirmation Code", "Guest", "Property", "Date"}
+
+# Headers of the sheet's checkbox columns. Used only when the tab has no data rows
+# to inspect (an auto-created month tab), so TRUE/FALSE detection has nothing to go
+# on. "." / "FALSE" are how older sheet exports named the same four columns.
+CHECKBOX_HEADER_NAMES = {"assigned", "verified", "out", "in", "true", "false"}
 
 
 # ---- City resolution (exact -> canonical -> street level) --------------------
@@ -90,14 +108,68 @@ def _date_key(v) -> str:
     return str(v).strip()[:10]
 
 
+def _is_checkbox_header(col) -> bool:
+    """Does this column header name one of the sheet's checkbox columns?"""
+    raw = str(col).strip()
+    if raw == ".":  # older exports named the 'assigned' column "."
+        return True
+    # read_as_dataframe de-duplicates repeated headers as FALSE, FALSE.1, FALSE.2
+    base = raw.split(".")[0] if raw.upper().startswith(("TRUE", "FALSE")) else raw
+    return _norm(base) in CHECKBOX_HEADER_NAMES
+
+
+_TIME_RE = re.compile(r"^\d{1,2}:\d{2}\s*[AP]M$", re.I)
+
+
+def _reject_shifted_layout(sheet: pd.DataFrame) -> None:
+    """
+    Refuse to merge into a tab whose columns are off by one.
+
+    Tabs written before the empty-tab fix got the pipeline's 10 columns under the
+    sheet's wider header, so check-out times ended up under `Property`. Merging into
+    one of those would double every row instead of correcting it.
+    """
+    if not len(sheet) or "Property" not in sheet.columns:
+        return
+    prop = sheet["Property"].astype(str).str.strip()
+    prop = prop[prop != ""]
+    if len(prop) and prop.map(lambda v: bool(_TIME_RE.match(v))).mean() > 0.5:
+        raise ValueError(
+            "the Property column holds times, not addresses -- this tab was written "
+            "with the old shifted layout. Clear its data rows (row 2 downwards) and "
+            "re-run; the sync will repopulate the month correctly."
+        )
+
+
 def merge_reservations_into_sheet(
     candidates: pd.DataFrame,
     sheet: pd.DataFrame,
     city_ref_csv: str = "property_to_city.csv",
-) -> tuple[pd.DataFrame, dict]:
+    cancel_window: tuple[str, str] | None = None,
+    struck_rows: set | frozenset = frozenset(),
+    cancel_guard: tuple[float, int] = (0.5, 10),
+) -> tuple[pd.DataFrame, dict, dict]:
+    """
+    cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
+        covers. An existing sheet row dated inside it whose (Property, Date) no
+        longer appears in `candidates` is treated as CANCELLED: kept in place and
+        flagged for strikethrough rather than silently left behind. Pass None to
+        disable cancellation detection entirely.
+    struck_rows : 0-based positions of `sheet` rows an earlier run already struck
+        through. They are excluded from matching (a re-booking must land as a new
+        row) and are not re-reported as cancellations.
+    cancel_guard : (max_ratio, min_count) circuit-breaker. If a single run would
+        cancel more than `max_ratio` of the tab's in-window rows AND more than
+        `min_count` of them, the whole month almost certainly went missing because
+        the fetch came back short -- not because guests cancelled overnight. No
+        rows are struck and `stats["cancel_guard_tripped"]` is set instead.
+    """
     candidates = candidates.copy()
 
-    if sheet is None or not len(sheet):
+    # A tab with a header but no data rows (freshly auto-created month) still
+    # defines the column layout -- only fall back to the pipeline's own columns
+    # when there is genuinely no header to align to.
+    if sheet is None or not len(sheet.columns):
         sheet = pd.DataFrame(columns=list(candidates.columns))
     else:
         # Safety guard: is this really the reservations layout?
@@ -107,6 +179,8 @@ def merge_reservations_into_sheet(
                 f"Sheet doesn't look like the reservations layout "
                 f"(missing columns: {sorted(missing)}). Columns found: {list(sheet.columns)}"
             )
+    sheet = sheet.reset_index(drop=True)  # positions must be 0..n-1 for row maths
+    _reject_shifted_layout(sheet)
 
     # Fill City
     resolve_city = build_city_resolver(sheet, city_ref_csv)
@@ -134,6 +208,8 @@ def merge_reservations_into_sheet(
 
     existing_by_key: dict = {}
     for i, r in sheet.iterrows():
+        if i in struck_rows:
+            continue  # already cancelled: must not match, so a re-booking reads as new
         key = (str(r["Property"]).strip(), _date_key(r["Date"]))
         existing_by_key.setdefault(key, []).append({
             "row": i + 2,  # Google Sheet row number (header is row 1)
@@ -150,35 +226,79 @@ def merge_reservations_into_sheet(
             "T/O": str(row.get("T/O", "")).strip(),
         }
 
-    keep_idx, carry_rows, delete_rows = [], [], []
+    keep_idx, carry_rows, delete_rows, append_flags = [], [], [], []
     new_records, updated_records = [], []
     n_new = n_updated = n_unchanged = 0
+    live_keys, live_canon = set(), set()
     for j, c in candidates.iterrows():
-        key = (str(c["Property"]).strip(), _date_key(c["Date"]))
+        prop, day = str(c["Property"]).strip(), _date_key(c["Date"])
+        key = (prop, day)
+        live_keys.add(key)
+        # Cosmetic spelling drift ("520 E Harris&CH" vs "520 E Harris CH") must not
+        # read as a cancellation, so keep a canonical index alongside the exact one.
+        live_canon.add((_canonical_key(prop), day))
         matches = existing_by_key.get(key)
         if not matches:
-            keep_idx.append(j); carry_rows.append(None); n_new += 1
+            keep_idx.append(j); carry_rows.append(None); append_flags.append("new")
+            n_new += 1
             new_records.append(_rec(c)); continue
         csig = sig(c, "Check-out Time", "Check-in Time")
         if any(m["sig"] == csig for m in matches):
             n_unchanged += 1; continue
-        keep_idx.append(j); carry_rows.append(matches[0]["data"]); n_updated += 1
+        keep_idx.append(j); carry_rows.append(matches[0]["data"])
+        append_flags.append("updated"); n_updated += 1
         updated_records.append(_rec(c))
         delete_rows.extend(matches)
 
     new_rows = candidates.loc[keep_idx].reset_index(drop=True)
 
-    # Detect checkbox columns (values are TRUE/FALSE)
-    def is_checkbox(col):
-        v = sheet[col].astype(str).str.strip()
-        v = v[v != ""]
-        return len(v) > 0 and v.str.upper().isin(["TRUE", "FALSE"]).mean() >= 0.8
-
-    checkbox_cols = [c for c in sheet.columns if is_checkbox(c)] if len(sheet) else []
+    # --- Cancellations -------------------------------------------------------
+    # A row still sitting in the sheet, dated inside the window the Guesty fetch
+    # fully covers, whose (Property, Date) produced no candidate at all. The
+    # reservation was cancelled (or the listing was excluded) upstream. Rows
+    # superseded above are NOT cancellations -- their key is in `live_keys`.
+    cancelled_pos: set[int] = set()
+    guard_tripped = ""
+    if cancel_window and len(sheet):
+        lo, hi = cancel_window
+        in_window = 0
+        for i, r in sheet.iterrows():
+            if i in struck_rows:
+                continue
+            prop, d = str(r["Property"]).strip(), _date_key(r["Date"])
+            if not prop or not (lo <= d <= hi):
+                continue
+            in_window += 1
+            if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
+                cancelled_pos.add(i)
+        max_ratio, min_count = cancel_guard
+        if (len(cancelled_pos) > min_count
+                and in_window
+                and len(cancelled_pos) / in_window > max_ratio):
+            guard_tripped = (
+                f"{len(cancelled_pos)} of {in_window} in-window rows would be struck "
+                f"(> {max_ratio:.0%}); treating this as a short fetch, not a mass "
+                f"cancellation. Nothing struck on this tab."
+            )
+            cancelled_pos = set()
 
     # Build new/updated rows aligned to the sheet's exact columns
     pipe_by_norm = {_norm(c): c for c in new_rows.columns}
     target_cols = list(sheet.columns) if len(sheet.columns) else list(candidates.columns)
+
+    # Checkbox columns: TRUE/FALSE in the data where there is data, else by header
+    # name (an auto-created tab has no data rows to sample).
+    def is_checkbox(col):
+        if pipe_by_norm.get(_norm(col)) is not None:
+            return False  # a real data column, never a checkbox
+        v = sheet[col].astype(str).str.strip() if len(sheet) else pd.Series(dtype=str)
+        v = v[v != ""]
+        if len(v):
+            return bool(v.str.upper().isin(["TRUE", "FALSE"]).mean() >= 0.8)
+        return _is_checkbox_header(col)
+
+    checkbox_cols = [c for c in target_cols if is_checkbox(c)]
+
     to_append = pd.DataFrame("", index=range(len(new_rows)), columns=target_cols)
     for col in target_cols:
         src = pipe_by_norm.get(_norm(col))
@@ -202,9 +322,16 @@ def merge_reservations_into_sheet(
     else:
         kept_existing = sheet
 
+    # Where each carried-over row sat in the old sheet -- lets the writer tell an
+    # already-highlighted row from one it must newly paint.
+    kept_positions = [int(i) for i in kept_existing.index]
+    row_flags = ["cancelled" if p in cancelled_pos else "struck" if p in struck_rows else ""
+                 for p in kept_positions] + append_flags
+
     full = (pd.concat([kept_existing, to_append], ignore_index=True)
             if len(kept_existing) else to_append.copy())
     full = full.reindex(columns=target_cols).fillna("")
+    assert len(row_flags) == len(full), (len(row_flags), len(full))
 
     missing_city = int(
         (to_append.get("City", pd.Series(dtype=str)).astype(str).str.strip() == "").sum()
@@ -227,12 +354,22 @@ def merge_reservations_into_sheet(
         and str(to_append.iloc[i].get("Property", "")).strip() != ""
     })
 
+    cancelled_records = [{
+        "Date": _date_key(sheet.at[i, "Date"]),
+        "Property": str(sheet.at[i, "Property"]).strip(),
+        "Guest": str(sheet.at[i, "Guest"]).strip(),
+        "Confirmation Code": str(sheet.at[i, "Confirmation Code"]).strip(),
+        "sheet_row": i + 2,
+    } for i in sorted(cancelled_pos)]
+
     stats = {
         "existing_rows": len(sheet),
         "new": n_new,
         "updated": n_updated,
         "unchanged": n_unchanged,
         "removed": len(delete_rows),
+        "cancelled": len(cancelled_pos),
+        "cancel_guard_tripped": guard_tripped,
         "missing_city": missing_city,
         "total_rows": len(full),
     }
@@ -240,6 +377,10 @@ def merge_reservations_into_sheet(
         "new": new_records,
         "updated": updated_records,
         "removed": removed_records,
+        "cancelled": cancelled_records,
         "missing_city_properties": missing_city_props,
+        # Painting instructions for the writer (see the module docstring).
+        "row_flags": row_flags,
+        "kept_positions": kept_positions,
     }
     return full, stats, changes

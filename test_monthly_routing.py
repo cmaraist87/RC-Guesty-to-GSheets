@@ -3,11 +3,13 @@ Offline test of per-month tab routing (no network) using a mocked spreadsheet.
 
 Run: python test_monthly_routing.py
 """
+import re
+
 import sheets_client
 import sync
 
-HEADER = ["City", "Day", "Date", "Confirmation Code", "Guest", ".", "Property",
-          "FALSE", "Check out - Time", "FALSE", "Check-in Time", "FALSE",
+HEADER = ["City", "Day", "Date", "Confirmation Code", "Guest", "assigned", "Property",
+          "Verified", "Check out - Time", "OUT", "Check-in Time", "IN",
           "T/O", "Adjustments", "", ""]
 
 
@@ -33,6 +35,11 @@ class FakeWS:
 
     def batch_clear(self, ranges):
         self.cleared = ranges
+        # Behave like Sheets: A<n>:… drops the values from row n down.
+        for rng in ranges:
+            m = re.match(r"^[A-Z]+(\d+):", rng)
+            if m:
+                self._values = self._values[:int(m.group(1)) - 1]
 
 
 class FakeSS:
@@ -93,11 +100,89 @@ def test_routing(fake, existing):
     assert sept is not None, "Septiembre 2026 should have been auto-created"
     assert sept.updated is not None, "auto-created Sept tab should have been written"
     assert sept.updated[0] == HEADER, "auto-created tab keeps the template header"
+
+    # Regression: a header-only tab (every auto-created one) used to fall back to
+    # the pipeline's 10 columns, so the body was written one column short of the
+    # header and everything from 'assigned' on landed in the wrong column.
+    col = {name: i for i, name in enumerate(HEADER)}
+    for tab in (jul, sept):
+        for body_row in tab.updated[1:]:
+            assert len(body_row) == len(HEADER), (tab.title, len(body_row), body_row)
+            assert body_row[col["Property"]] == "3223 Canal", (tab.title, body_row)
+            assert body_row[col["Check out - Time"]] in ("", "11:00 AM"), body_row
+            for cb in ("assigned", "Verified", "OUT", "IN"):
+                assert body_row[col[cb]] == "FALSE", (tab.title, cb, body_row)
     print("OK routing: Aug/Jul written, guesty_res untouched, Sept auto-created + written")
+    print("OK alignment: body rows are header-width with checkboxes in their own columns")
+
+
+class RecordingSS:
+    """Minimal spreadsheet stand-in that captures batch_update payloads."""
+
+    def __init__(self, row_marks=None):
+        self.requests = []
+        self._row_marks = row_marks or []
+
+    def batch_update(self, body):
+        self.requests.extend(body["requests"])
+
+    def fetch_sheet_metadata(self, params=None):
+        return {"sheets": [{"data": [{"rowData": self._row_marks}]}]}
+
+
+def _cell(strike=False, bg=None):
+    fmt = {"textFormat": {"strikethrough": strike}}
+    if bg:
+        fmt["backgroundColor"] = bg
+    return {"values": [{"effectiveFormat": fmt}]}
+
+
+def test_read_row_marks():
+    ws = FakeWS("Noviembre 2026", [HEADER])
+    ws.spreadsheet = RecordingSS(row_marks=[
+        _cell(),                                            # header row, ignored
+        _cell(),                                            # data row 0: clean
+        _cell(strike=True),                                 # data row 1: struck
+        _cell(bg=dict(sheets_client.HIGHLIGHT_RGB)),        # data row 2: highlighted
+        _cell(bg={"red": 0.8, "green": 0.9, "blue": 1.0}),  # data row 3: someone else's fill
+    ])
+    struck, highlighted = sheets_client.read_row_marks(ws)
+    assert struck == {1}, struck
+    assert highlighted == {2}, highlighted
+    print("OK read_row_marks: strikethrough + our highlight recognised, other fills ignored")
+
+
+def test_apply_row_marks_requests():
+    ws = FakeWS("Noviembre 2026", [HEADER])
+    ws.spreadsheet = RecordingSS()
+    # rows 0-1 carry yesterday's highlight; row 1 is still new today, row 0 isn't.
+    flags = ["", "new", "cancelled", "cancelled", "struck", "new"]
+    marks = sheets_client.apply_row_marks(ws, flags, was_highlighted={0, 1},
+                                          n_cols=len(HEADER))
+    assert marks == {"struck": 2, "highlighted": 1, "unhighlighted": 1}, marks
+
+    got = [(r["repeatCell"]["fields"],
+            r["repeatCell"]["range"]["startRowIndex"],
+            r["repeatCell"]["range"]["endRowIndex"])
+           for r in ws.spreadsheet.requests]
+    # Rows 2-3 strike as ONE request (contiguous); row 4 was already struck -> skipped.
+    assert ("userEnteredFormat.textFormat.strikethrough", 3, 5) in got, got
+    # Row 5 is newly highlighted; row 1 already was, so it isn't repainted.
+    assert ("userEnteredFormat.backgroundColor", 6, 7) in got, got
+    # Row 0 kept yesterday's highlight but isn't new today -> cleared.
+    assert ("userEnteredFormat.backgroundColor", 1, 2) in got, got
+    assert all(r["repeatCell"]["range"]["endColumnIndex"] == len(HEADER)
+               for r in ws.spreadsheet.requests)
+    # Only the two cosmetic properties are ever touched -- checkbox validation lives.
+    assert all(set(r["repeatCell"]["cell"]["userEnteredFormat"])
+               <= {"textFormat", "backgroundColor"} for r in ws.spreadsheet.requests)
+    print("OK apply_row_marks: contiguous runs, no redundant repaints, formatting scoped")
 
 
 if __name__ == "__main__":
     test_parse_titles()
+    test_read_row_marks()
+    test_apply_row_marks_requests()
 
     # Build fake workbook: Agosto has one existing (unchanged) row, Julio empty-ish,
     # plus a non-month tab that must be ignored. No September tab on purpose.

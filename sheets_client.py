@@ -21,6 +21,16 @@ import pandas as pd
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Visual diff for the daily run: rows written today are highlighted, rows whose
+# reservation was cancelled are struck through (and left in place, not deleted).
+HIGHLIGHT_RGB = {"red": 1.0, "green": 0.898, "blue": 0.6}   # soft amber
+NO_FILL_RGB = {"red": 1.0, "green": 1.0, "blue": 1.0}
+_HL_TOLERANCE = 0.04
+
+_HIGHLIGHT_FLAGS = ("new", "updated")
+_STRIKE_NEW_FLAG = "cancelled"   # struck for the first time this run
+_STRIKE_OLD_FLAG = "struck"      # already struck by an earlier run
+
 
 def _load_credentials(sa_json: str):
     from google.oauth2.service_account import Credentials
@@ -99,6 +109,15 @@ def create_month_tab(ss, template_title: str, new_title: str):
     n_rows, n_cols = new_ws.row_count, new_ws.col_count
     if n_rows > 1:  # keep row 1 (header) + formatting; wipe the copied data values
         new_ws.batch_clear([f"A2:{_col_letter(n_cols)}{n_rows}"])
+        # duplicate_sheet also copies the template's strikethrough/highlight marks.
+        # Clear them, or the new month opens pre-painted with last month's diff.
+        _apply_requests(new_ws, [
+            _fmt_request(new_ws, 1, n_rows, n_cols,
+                         {"textFormat": {"strikethrough": False},
+                          "backgroundColor": dict(NO_FILL_RGB)},
+                         "userEnteredFormat.textFormat.strikethrough,"
+                         "userEnteredFormat.backgroundColor"),
+        ])
     return new_ws
 
 
@@ -133,16 +152,152 @@ def read_as_dataframe(ws) -> tuple[pd.DataFrame, list[str]]:
     return df, header_raw
 
 
-def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str]) -> None:
+def _close(a, b) -> bool:
+    return a is not None and abs(a - b) <= _HL_TOLERANCE
+
+
+def _is_highlight(bg) -> bool:
+    if not isinstance(bg, dict):
+        return False
+    return (_close(bg.get("red", 1.0), HIGHLIGHT_RGB["red"])
+            and _close(bg.get("green", 1.0), HIGHLIGHT_RGB["green"])
+            and _close(bg.get("blue", 1.0), HIGHLIGHT_RGB["blue"]))
+
+
+def read_row_marks(ws) -> tuple[set[int], set[int]]:
+    """
+    Read back the marks this sync painted on a previous run.
+
+    Returns (struck, highlighted) as 0-based DATA-row positions (data row 0 is
+    grid row 2). Only column A is sampled -- marks are applied to whole rows.
+    Returns empty sets if the workbook can't be queried (offline tests, fakes).
+    """
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
+        return set(), set()
+    params = {
+        "includeGridData": "true",
+        "ranges": [f"'{ws.title}'!A:A"],
+        "fields": "sheets(data(rowData(values(effectiveFormat("
+                  "backgroundColor,textFormat/strikethrough)))))",
+    }
+    try:
+        meta = ss.fetch_sheet_metadata(params)
+    except Exception as e:  # noqa: BLE001 - marks are cosmetic; never fail the sync
+        print(f"   (could not read existing row marks on '{ws.title}': {e})")
+        return set(), set()
+
+    sheets = meta.get("sheets") or []
+    data = ((sheets[0].get("data") or [{}])[0] if sheets else {})
+    row_data = data.get("rowData") or []
+
+    struck, highlighted = set(), set()
+    for i, rd in enumerate(row_data[1:]):  # skip the header row
+        values = rd.get("values") or []
+        if not values:
+            continue
+        fmt = values[0].get("effectiveFormat") or {}
+        if (fmt.get("textFormat") or {}).get("strikethrough"):
+            struck.add(i)
+        if _is_highlight(fmt.get("backgroundColor")):
+            highlighted.add(i)
+    return struck, highlighted
+
+
+def _runs(indices) -> list[tuple[int, int]]:
+    """[1,2,3,7,8] -> [(1,3), (7,8)] -- contiguous blocks, so one request each."""
+    out: list[list[int]] = []
+    for i in sorted(indices):
+        if out and i == out[-1][1] + 1:
+            out[-1][1] = i
+        else:
+            out.append([i, i])
+    return [(a, b) for a, b in out]
+
+
+def _fmt_request(ws, start_row: int, end_row: int, n_cols: int,
+                 cell_format: dict, fields: str) -> dict:
+    """repeatCell over grid rows [start_row, end_row) -- 0-based, header is row 0."""
+    return {"repeatCell": {
+        "range": {"sheetId": ws.id,
+                  "startRowIndex": start_row, "endRowIndex": end_row,
+                  "startColumnIndex": 0, "endColumnIndex": n_cols},
+        "cell": {"userEnteredFormat": cell_format},
+        "fields": fields,
+    }}
+
+
+def _apply_requests(ws, requests: list[dict]) -> None:
+    if not requests:
+        return
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None or not hasattr(ss, "batch_update"):
+        return  # offline / fake worksheet: nothing to paint
+    try:
+        ss.batch_update({"requests": requests})
+    except Exception as e:  # noqa: BLE001 - cosmetic; the values are already written
+        print(f"   (could not apply row formatting on '{ws.title}': {e})")
+
+
+def apply_row_marks(ws, row_flags: list[str], was_highlighted: set,
+                    n_cols: int, clear_from: int | None = None) -> dict:
+    """
+    Paint the daily diff: strike through newly-cancelled rows, highlight the rows
+    this run wrote, and drop the highlight from rows carried over from the last run.
+
+    Only `strikethrough` and `backgroundColor` are touched, so checkbox validation,
+    borders, fonts and column widths all survive.
+
+    row_flags       : one flag per data row of the freshly written block.
+    was_highlighted : data-row positions (in the NEW block) that already carry the
+                      highlight from a previous run.
+    clear_from      : first data row of the trailing region being value-cleared;
+                      its marks are reset so no ghost formatting is left behind.
+    """
+    strike_on = [i for i, f in enumerate(row_flags) if f == _STRIKE_NEW_FLAG]
+    highlight_on = [i for i, f in enumerate(row_flags)
+                    if f in _HIGHLIGHT_FLAGS and i not in was_highlighted]
+    highlight_off = [i for i in sorted(was_highlighted)
+                     if i < len(row_flags) and row_flags[i] not in _HIGHLIGHT_FLAGS]
+
+    requests = []
+    for rows, cell_format, fields in (
+        (strike_on, {"textFormat": {"strikethrough": True}},
+         "userEnteredFormat.textFormat.strikethrough"),
+        (highlight_on, {"backgroundColor": dict(HIGHLIGHT_RGB)},
+         "userEnteredFormat.backgroundColor"),
+        (highlight_off, {"backgroundColor": dict(NO_FILL_RGB)},
+         "userEnteredFormat.backgroundColor"),
+    ):
+        for a, b in _runs(rows):
+            requests.append(_fmt_request(ws, a + 1, b + 2, n_cols, cell_format, fields))
+
+    if clear_from is not None and clear_from > len(row_flags):
+        requests.append(_fmt_request(
+            ws, len(row_flags) + 1, clear_from + 1, n_cols,
+            {"textFormat": {"strikethrough": False}, "backgroundColor": dict(NO_FILL_RGB)},
+            "userEnteredFormat.textFormat.strikethrough,userEnteredFormat.backgroundColor"))
+
+    _apply_requests(ws, requests)
+    return {"struck": len(strike_on), "highlighted": len(highlight_on),
+            "unhighlighted": len(highlight_off)}
+
+
+def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
+                    row_flags: list[str] | None = None,
+                    was_highlighted: set | None = None) -> dict:
     """
     Write `full` starting at A1, keeping the sheet's ORIGINAL header row intact and
     value-clearing any rows below the new data (checkbox formatting preserved).
+
+    With `row_flags`, also repaint the daily diff (see apply_row_marks).
     """
     prev_row_count = len(ws.get_all_values())
 
     body = full.astype(str).values.tolist()
     matrix = [list(header_raw)] + body
     new_row_count = len(matrix)
+    n_cols = max(len(header_raw), full.shape[1])
 
     ws.update(
         range_name="A1",
@@ -152,9 +307,12 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str]) -> None:
 
     # Value-clear leftover rows below the freshly written block (keeps formatting).
     if prev_row_count > new_row_count:
-        n_cols = max(len(header_raw), full.shape[1])
-        last_col = _col_letter(n_cols)
-        ws.batch_clear([f"A{new_row_count + 1}:{last_col}{prev_row_count}"])
+        ws.batch_clear([f"A{new_row_count + 1}:{_col_letter(n_cols)}{prev_row_count}"])
+
+    if row_flags is None:
+        return {}
+    return apply_row_marks(ws, row_flags, was_highlighted or set(), n_cols,
+                           clear_from=max(prev_row_count - 1, len(row_flags)))
 
 
 def _col_letter(n: int) -> str:

@@ -24,6 +24,9 @@ Config (environment variables):
     SYNC_LOOKBACK_DAYS   (default 1)         include check-outs from N days ago
     SYNC_LOOKAHEAD_DAYS  (default 180)       include check-ins up to N days ahead
     SYNC_STATUSES        (default confirmed,reserved,checkedIn)
+    SYNC_MARK_CANCELLED  (default 1)         strike through rows whose reservation
+                                             disappeared from Guesty instead of
+                                             leaving them silently in the sheet
 """
 from __future__ import annotations
 
@@ -87,13 +90,21 @@ def load_config() -> dict:
         "statuses": [s.strip() for s in
                      _env("SYNC_STATUSES", "confirmed,reserved,checkedIn").split(",")
                      if s.strip()],
+        "mark_cancelled": _env("SYNC_MARK_CANCELLED", "1").lower()
+                          not in ("0", "false", "no", "off"),
     }
 
 
-def build_filters(cfg: dict) -> list[dict]:
+def coverage_window(cfg: dict) -> tuple[str, str]:
+    """The date range the Guesty fetch fully covers -- outside it, a sheet row with
+    no matching reservation means 'out of range', not 'cancelled'."""
     today = _today_chicago()
-    start = (today - timedelta(days=cfg["lookback"])).isoformat()
-    end = (today + timedelta(days=cfg["lookahead"])).isoformat()
+    return ((today - timedelta(days=cfg["lookback"])).isoformat(),
+            (today + timedelta(days=cfg["lookahead"])).isoformat())
+
+
+def build_filters(cfg: dict) -> list[dict]:
+    start, end = coverage_window(cfg)
     return [
         {"field": "checkOut", "operator": "$gte", "value": start},
         {"field": "checkIn", "operator": "$lte", "value": end},
@@ -155,8 +166,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         print("\nNo SHEET_ID/GOOGLE_SA_JSON set -> preview only (merged against empty sheet).")
         return 0
 
-    from sheets_client import (open_spreadsheet, month_worksheets,
-                               read_as_dataframe, write_dataframe, create_month_tab)
+    from sheets_client import (open_spreadsheet, month_worksheets, read_as_dataframe,
+                               read_row_marks, write_dataframe, create_month_tab)
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
     if not month_ws:
@@ -170,7 +181,15 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     template_title = cfg["template_tab"] or month_ws[max(month_ws.keys())].title
     print(f"Template tab for auto-creating missing months: '{template_title}'")
 
-    grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0, "missing_city": 0}
+    cancel_window = coverage_window(cfg) if cfg.get("mark_cancelled", True) else None
+    if cancel_window:
+        print(f"Cancellation detection ON for dates {cancel_window[0]} .. {cancel_window[1]} "
+              "(rows outside that range are never struck).")
+    else:
+        print("Cancellation detection OFF (SYNC_MARK_CANCELLED).")
+
+    grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
+             "cancelled": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
     created = []      # titles of tabs auto-created this run
     snapshots = []
@@ -194,19 +213,35 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 skipped.append((ym, len(cand)))
                 continue
         sheet_df, header_raw = read_as_dataframe(ws)
+        prior_struck, prior_highlight = read_row_marks(ws)
         try:
-            full, stats, changes = merge_reservations_into_sheet(cand, sheet_df)
+            full, stats, changes = merge_reservations_into_sheet(
+                cand, sheet_df,
+                cancel_window=cancel_window,
+                struck_rows=prior_struck,
+            )
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             continue
         for k in grand:
             grand[k] += stats.get(k, 0)
         emit_change_report(stats, changes, will_write=(not dry_run), label=ws.title)
-        snap = full.copy(); snap.insert(0, "_tab", ws.title); snapshots.append(snap)
+        snap = full.copy(); snap.insert(0, "_tab", ws.title)
+        snap.insert(1, "_mark", changes["row_flags"]); snapshots.append(snap)
         if not dry_run:
-            write_dataframe(ws, full, header_raw)
+            # Rows carried over from the last run that still wear yesterday's
+            # highlight, remapped to their position in the block we're about to write.
+            was_highlighted = {i for i, pos in enumerate(changes["kept_positions"])
+                               if pos in prior_highlight}
+            marks = write_dataframe(ws, full, header_raw,
+                                    row_flags=changes["row_flags"],
+                                    was_highlighted=was_highlighted)
             n_written += 1
-            print(f"   -> wrote {len(full)} rows to tab '{ws.title}'.")
+            print(f"   -> wrote {len(full)} rows to tab '{ws.title}'"
+                  + (f" (highlighted {marks.get('highlighted', 0)}, "
+                     f"struck {marks.get('struck', 0)}, "
+                     f"cleared {marks.get('unhighlighted', 0)} old highlight(s))."
+                     if marks else "."))
 
     if snapshots:
         pd.concat(snapshots, ignore_index=True).to_csv(OUTPUT_CSV, index=False)
@@ -215,7 +250,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     print("\n" + "#" * 60)
     print("  GRAND TOTAL across monthly tabs")
     print(f"    New {grand['new']} | Updated {grand['updated']} | Removed {grand['removed']} "
-          f"| Unchanged {grand['unchanged']} | Missing City {grand['missing_city']}")
+          f"| Cancelled {grand['cancelled']} | Unchanged {grand['unchanged']} "
+          f"| Missing City {grand['missing_city']}")
     if created:
         print("  Auto-created tabs: " + ", ".join(created))
     if skipped:
@@ -242,10 +278,10 @@ def _write_grand_summary(grand: dict, skipped: list, created: list, will_write: 
     try:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(f"\n## GRAND TOTAL — {'LIVE (tabs written)' if will_write else 'DRY RUN'}\n\n")
-            fh.write("| New | Updated | Removed | Unchanged | Missing City |\n")
-            fh.write("|----:|--------:|--------:|----------:|-------------:|\n")
+            fh.write("| New | Updated | Removed | Cancelled | Unchanged | Missing City |\n")
+            fh.write("|----:|--------:|--------:|----------:|----------:|-------------:|\n")
             fh.write(f"| {grand['new']} | {grand['updated']} | {grand['removed']} | "
-                     f"{grand['unchanged']} | {grand['missing_city']} |\n")
+                     f"{grand['cancelled']} | {grand['unchanged']} | {grand['missing_city']} |\n")
             if created:
                 fh.write("\n**Auto-created tabs:** " + ", ".join(f"`{t}`" for t in created) + "\n")
             if skipped:
@@ -292,16 +328,22 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     print("\n" + "=" * 60)
     print(f"  {tag}WHAT CHANGED  --  {verb}")
     print("=" * 60)
-    print(f"  New rows        : {stats['new']}")
-    print(f"  Updated rows    : {stats['updated']}")
+    print(f"  New rows        : {stats['new']}  (highlighted)")
+    print(f"  Updated rows    : {stats['updated']}  (highlighted)")
     print(f"  Removed rows    : {stats['removed']}")
+    print(f"  Cancelled rows  : {stats.get('cancelled', 0)}  (struck through, kept in place)")
     print(f"  Unchanged       : {stats['unchanged']}")
     print(f"  Total in sheet  : {stats['total_rows']}")
     print(f"  Missing City    : {stats['missing_city']}")
-    print("\n  --- New ---\n" + _fmt_rows(changes["new"], cols))
-    print("\n  --- Updated (old row dropped, checkbox carried over) ---\n"
+    print("\n  --- New (highlighted) ---\n" + _fmt_rows(changes["new"], cols))
+    print("\n  --- Updated (old row dropped, checkbox carried over, highlighted) ---\n"
           + _fmt_rows(changes["updated"], cols))
-    print("\n  --- Removed (superseded) ---\n" + _fmt_rows(changes["removed"], rcols))
+    print("\n  --- Removed (superseded by an updated row) ---\n"
+          + _fmt_rows(changes["removed"], rcols))
+    print("\n  --- Cancelled (no longer in Guesty -> struck through) ---\n"
+          + _fmt_rows(changes.get("cancelled", []), rcols))
+    if stats.get("cancel_guard_tripped"):
+        print("\n  !! CANCELLATION GUARD: " + stats["cancel_guard_tripped"])
     if changes["missing_city_properties"]:
         print("\n  --- Properties with no City (add to property_to_city.csv) ---")
         for p in changes["missing_city_properties"][:40]:
@@ -313,13 +355,19 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
         try:
             with open(summary_path, "a", encoding="utf-8") as fh:
                 fh.write(f"## {tag}Guesty → Sheet sync — {verb}\n\n")
-                fh.write(f"| New | Updated | Removed | Unchanged | Total | Missing City |\n")
-                fh.write(f"|----:|--------:|--------:|----------:|------:|-------------:|\n")
+                fh.write(f"| New | Updated | Removed | Cancelled | Unchanged | Total | Missing City |\n")
+                fh.write(f"|----:|--------:|--------:|----------:|----------:|------:|-------------:|\n")
                 fh.write(f"| {stats['new']} | {stats['updated']} | {stats['removed']} | "
-                         f"{stats['unchanged']} | {stats['total_rows']} | {stats['missing_city']} |\n\n")
-                fh.write("### New\n" + _md_table(changes["new"], cols))
-                fh.write("\n### Updated\n" + _md_table(changes["updated"], cols))
+                         f"{stats.get('cancelled', 0)} | {stats['unchanged']} | "
+                         f"{stats['total_rows']} | {stats['missing_city']} |\n\n")
+                fh.write("### New (highlighted)\n" + _md_table(changes["new"], cols))
+                fh.write("\n### Updated (highlighted)\n" + _md_table(changes["updated"], cols))
                 fh.write("\n### Removed (superseded)\n" + _md_table(changes["removed"], rcols))
+                fh.write("\n### Cancelled (struck through)\n"
+                         + _md_table(changes.get("cancelled", []), rcols))
+                if stats.get("cancel_guard_tripped"):
+                    fh.write("\n> ⚠️ **Cancellation guard tripped:** "
+                             + stats["cancel_guard_tripped"] + "\n")
                 if changes["missing_city_properties"]:
                     fh.write("\n### Properties missing City (add to property_to_city.csv)\n")
                     for p in changes["missing_city_properties"][:50]:

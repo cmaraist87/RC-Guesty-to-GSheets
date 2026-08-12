@@ -70,6 +70,26 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `SYNC_LOOKBACK_DAYS` | `1` | include check-outs from N days ago |
 | `SYNC_LOOKAHEAD_DAYS` | `180` | include check-ins up to N days ahead |
 | `SYNC_STATUSES` | `confirmed,reserved,checkedIn` | reservation statuses to include |
+| `SYNC_MARK_CANCELLED` | `1` | strike through rows whose reservation vanished from Guesty. Set `0` to leave them untouched. |
+
+### Daily visual diff — highlights and strikethrough
+Each run marks what it changed, so the ops team can see the day's delta at a glance:
+
+| Mark | Meaning |
+|------|---------|
+| **Amber highlight** | the row was written by *this* run (new booking, or a booking whose times/guest changed). Yesterday's highlights are cleared first, so the fill always means "changed today". |
+| ~~**Strikethrough**~~ | the reservation is no longer in Guesty — cancelled. The row is **kept in place**, not deleted, so nobody loses context on a job that was already assigned. |
+
+Only `strikethrough` and `backgroundColor` are ever written, so checkbox validation,
+borders, fonts and column widths survive untouched. Struck rows stay struck on later
+runs and stop matching, so a re-booking of the same property/date lands as a fresh
+highlighted row underneath. Delete struck rows by hand whenever you've cleared them.
+
+A **cancellation only counts inside the window the fetch covers**
+(`SYNC_LOOKBACK_DAYS` … `SYNC_LOOKAHEAD_DAYS`) — rows outside it are never struck.
+As a further guard, if one run would strike more than half of a tab's in-window rows
+(and more than 10), it strikes nothing and reports a warning instead: that pattern
+means a short Guesty fetch, not a mass cancellation.
 
 ### Safety toggle — going live
 By default the automatic daily run **does not write your sheet** — it runs as a dry-run so you
@@ -135,6 +155,12 @@ back to `client_ID` / `SECRET_KEY` in `variables.env` if present. The dry run wr
 - The live write replaces only cell **values**, so checkbox **formatting/validation is
   preserved** (same as the manual paste-over-A1). Rows below the new data are value-cleared,
   which also removes superseded rows the manual paste used to leave behind.
+- **The target tab's own header defines the column layout** — including the
+  `assigned` / `Verified` / `OUT` / `IN` checkbox columns interleaved with the data.
+  This holds even for a tab with no data rows yet; a freshly auto-created month used
+  to fall back to the pipeline's 10 columns, which shifted everything from `assigned`
+  onward one column left. A tab still carrying that damage is now detected and
+  **skipped** with a message — clear its data rows (row 2 down) and re-run to rebuild it.
 - Secrets never live in the repo — only in GitHub Actions secrets. `variables.env`,
   `.guesty_token.json`, and data CSVs are git-ignored.
 - The daily job is idempotent: re-running produces the same sheet for the same Guesty data.
