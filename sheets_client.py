@@ -28,7 +28,9 @@ NO_FILL_RGB = {"red": 1.0, "green": 1.0, "blue": 1.0}
 _HL_TOLERANCE = 0.04
 
 _HIGHLIGHT_FLAGS = ("new", "updated")
-_STRIKE_NEW_FLAG = "cancelled"   # struck for the first time this run
+# Struck for the first time this run. "moved" is a reassignment (the booking turned
+# up at another listing/date); the row's slot is just as dead, so it strikes too.
+_STRIKE_NEW_FLAGS = ("cancelled", "moved")
 _STRIKE_OLD_FLAG = "struck"      # already struck by an earlier run
 
 
@@ -106,19 +108,34 @@ def create_month_tab(ss, template_title: str, new_title: str):
     """
     src = ss.worksheet(template_title)
     new_ws = ss.duplicate_sheet(source_sheet_id=src.id, new_sheet_name=new_title)
-    n_rows, n_cols = new_ws.row_count, new_ws.col_count
-    if n_rows > 1:  # keep row 1 (header) + formatting; wipe the copied data values
-        new_ws.batch_clear([f"A2:{_col_letter(n_cols)}{n_rows}"])
-        # duplicate_sheet also copies the template's strikethrough/highlight marks.
-        # Clear them, or the new month opens pre-painted with last month's diff.
-        _apply_requests(new_ws, [
-            _fmt_request(new_ws, 1, n_rows, n_cols,
-                         {"textFormat": {"strikethrough": False},
-                          "backgroundColor": dict(NO_FILL_RGB)},
-                         "userEnteredFormat.textFormat.strikethrough,"
-                         "userEnteredFormat.backgroundColor"),
-        ])
+    # duplicate_sheet copies the template's data AND its strikethrough/highlight
+    # marks; clear both, or the new month opens pre-painted with last month's diff.
+    clear_data_rows(new_ws)
     return new_ws
+
+
+def clear_data_rows(ws) -> int:
+    """
+    Value-clear row 2 downwards and reset the marks this sync paints, leaving the
+    header row and every piece of formatting (checkbox data-validation, column
+    widths, borders, fonts) untouched. Returns the number of data rows cleared.
+
+    Used both to empty a freshly duplicated month tab and to repair a tab written
+    with the old shifted layout, which has to start from a clean slate because its
+    rows can't be matched against anything the pipeline now produces.
+    """
+    n_rows, n_cols = ws.row_count, ws.col_count
+    if n_rows <= 1 or n_cols < 1:
+        return 0
+    ws.batch_clear([f"A2:{_col_letter(n_cols)}{n_rows}"])
+    _apply_requests(ws, [
+        _fmt_request(ws, 1, n_rows, n_cols,
+                     {"textFormat": {"strikethrough": False},
+                      "backgroundColor": dict(NO_FILL_RGB)},
+                     "userEnteredFormat.textFormat.strikethrough,"
+                     "userEnteredFormat.backgroundColor"),
+    ])
+    return n_rows - 1
 
 
 def _dedupe_headers(header: list[str]) -> list[str]:
@@ -254,7 +271,7 @@ def apply_row_marks(ws, row_flags: list[str], was_highlighted: set,
     clear_from      : first data row of the trailing region being value-cleared;
                       its marks are reset so no ghost formatting is left behind.
     """
-    strike_on = [i for i, f in enumerate(row_flags) if f == _STRIKE_NEW_FLAG]
+    strike_on = [i for i, f in enumerate(row_flags) if f in _STRIKE_NEW_FLAGS]
     highlight_on = [i for i, f in enumerate(row_flags)
                     if f in _HIGHLIGHT_FLAGS and i not in was_highlighted]
     highlight_off = [i for i in sorted(was_highlighted)

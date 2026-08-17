@@ -135,6 +135,70 @@ def test_routing(fake, existing):
     print("OK alignment: body rows are header-width with checkboxes in their own columns")
 
 
+# A row as the pre-fix write left it: the pipeline's 10 columns pasted under the
+# sheet's 16-column header, so everything from `assigned` on sits one column left
+# and the check-out time lands in `Property`.
+SHIFTED_ROW = ["New Orleans", "Wednesday", "2026-08-05", "HA-OLD", "Old Guest",
+               "1201 N Roman V2", "11:00 AM", "04:00 PM", "", "", "", "", "", "", "", ""]
+
+AUG_RESERVATION = [{
+    "confirmationCode": "HA-AUG1", "status": "confirmed",
+    "guest": {"fullName": "Aug Guest"}, "listing": {"nickname": "1201 N Roman V2"},
+    "checkInDateLocalized": "2026-08-05", "checkOutDateLocalized": "2026-08-09",
+}]
+
+
+def _run_against_shifted_tab(repair: bool, dry_run: bool = False):
+    ago = FakeWS("Agosto 2026", [HEADER, list(SHIFTED_ROW), list(SHIFTED_ROW)])
+    fake = FakeSS([ago])
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 1, "lookahead": 180,
+           "statuses": ["confirmed"], "repair_shifted": repair}
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=dry_run, reservations=AUG_RESERVATION, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+    return ago
+
+
+def test_shifted_tab_is_skipped_without_the_flag():
+    ago = _run_against_shifted_tab(repair=False)
+    assert ago.updated is None, "a shifted tab must never be merged into"
+    assert ago.cleared == [], "and must never be cleared without the flag"
+    print("OK: shifted tab skipped untouched when SYNC_REPAIR_SHIFTED_TABS is off")
+
+
+def test_shifted_tab_dry_run_does_not_clear():
+    ago = _run_against_shifted_tab(repair=True, dry_run=True)
+    assert ago.cleared == [], "a dry run must not clear anything"
+    assert ago.updated is None, "a dry run must not write"
+    assert len(ago.get_all_values()) == 3, "the shifted rows are still there"
+    print("OK: repair flag + dry run previews only, sheet untouched")
+
+
+def test_shifted_tab_repair_clears_and_rebuilds():
+    ago = _run_against_shifted_tab(repair=True)
+    # Data rows wiped from row 2 down; the header row survives.
+    assert ago.cleared == ["A2:P1000"], ago.cleared
+    assert ago.updated is not None, "the repaired tab should have been rewritten"
+    assert ago.updated[0] == HEADER, ago.updated[0]
+    assert len(ago.updated) > 1, "the month should have been rebuilt from Guesty"
+
+    col = {name: i for i, name in enumerate(HEADER)}
+    for body_row in ago.updated[1:]:
+        assert len(body_row) == len(HEADER), (len(body_row), body_row)
+        # The whole point: `Property` holds an address again, not a time.
+        # Processing strips the listing's version marker, so "1201 N Roman V2" -> "1201 N Roman".
+        assert body_row[col["Property"]] == "1201 N Roman", body_row
+        assert body_row[col["Check out - Time"]] in ("", "11:00 AM"), body_row
+        assert body_row[col["Guest"]] == "Aug Guest", body_row
+        for cb in ("assigned", "Verified", "OUT", "IN"):
+            assert body_row[col[cb]] == "FALSE", (cb, body_row)
+    print("OK: shifted tab cleared, month rebuilt, columns back in their header slots")
+
+
 class RecordingSS:
     """Minimal spreadsheet stand-in that captures batch_update payloads."""
 
@@ -203,6 +267,9 @@ if __name__ == "__main__":
     test_tab_cancel_window()
     test_read_row_marks()
     test_apply_row_marks_requests()
+    test_shifted_tab_is_skipped_without_the_flag()
+    test_shifted_tab_dry_run_does_not_clear()
+    test_shifted_tab_repair_clears_and_rebuilds()
 
     # Build fake workbook: Agosto has one existing (unchanged) row, Julio empty-ish,
     # plus a non-month tab that must be ignored. No September tab on purpose.

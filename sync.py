@@ -27,6 +27,12 @@ Config (environment variables):
     SYNC_MARK_CANCELLED  (default 1)         strike through rows whose reservation
                                              disappeared from Guesty instead of
                                              leaving them silently in the sheet
+    SYNC_REPAIR_SHIFTED_TABS  (default 0)    DESTRUCTIVE, one-off. A tab written
+                                             with the pre-fix shifted layout is
+                                             normally skipped; set this to wipe its
+                                             data rows and repopulate the month from
+                                             Guesty. Clear it again once the affected
+                                             tabs are healthy.
 """
 from __future__ import annotations
 
@@ -40,7 +46,7 @@ import pandas as pd
 
 from guesty_adapter import reservations_to_frames, requested_fields, FIELD_MAP, _dig
 from processing import process_reservations
-from sheet_merge import merge_reservations_into_sheet
+from sheet_merge import ShiftedLayoutError, merge_reservations_into_sheet
 
 # Local snapshot of what was (or would be) written to the sheet. Deliberately NOT
 # "sheet_updated.csv" so automated runs never clobber the notebook's own output.
@@ -92,6 +98,8 @@ def load_config() -> dict:
                      if s.strip()],
         "mark_cancelled": _env("SYNC_MARK_CANCELLED", "1").lower()
                           not in ("0", "false", "no", "off"),
+        "repair_shifted": _env("SYNC_REPAIR_SHIFTED_TABS", "0").lower()
+                          in ("1", "true", "yes", "on"),
     }
 
 
@@ -187,7 +195,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         return 0
 
     from sheets_client import (open_spreadsheet, month_worksheets, read_as_dataframe,
-                               read_row_marks, write_dataframe, create_month_tab)
+                               read_row_marks, write_dataframe, create_month_tab,
+                               clear_data_rows)
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
     if not month_ws:
@@ -208,10 +217,15 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     else:
         print("Cancellation detection OFF (SYNC_MARK_CANCELLED).")
 
+    if cfg.get("repair_shifted"):
+        print("SYNC_REPAIR_SHIFTED_TABS is ON: a tab still on the old shifted layout "
+              "will have its data rows CLEARED and the month rebuilt from Guesty.")
+
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
-             "cancelled": 0, "missing_city": 0}
+             "cancelled": 0, "moved": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
     created = []      # titles of tabs auto-created this run
+    repaired = []     # titles of shifted-layout tabs rebuilt from scratch
     snapshots = []
     n_written = 0
 
@@ -240,6 +254,26 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 cancel_window=tab_cancel_window(cancel_window, ym),
                 struck_rows=prior_struck,
             )
+        except ShiftedLayoutError as e:
+            if not cfg.get("repair_shifted"):
+                print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
+                continue
+            # Nothing in a shifted tab can be matched, so the only repair is to drop
+            # its rows and rebuild the month. The header (and every bit of formatting)
+            # survives, which is what the merge needs to align the new rows.
+            if dry_run:
+                print(f"\n!! Tab '{ws.title}': WOULD BE REPAIRED -- {len(sheet_df)} "
+                      f"shifted data row(s) cleared, month rebuilt from Guesty.")
+            else:
+                n_cleared = clear_data_rows(ws)
+                print(f"\n!! Tab '{ws.title}': REPAIRED -- cleared {n_cleared} data "
+                      f"row(s) of the old shifted layout; rebuilding from Guesty.")
+            sheet_df = pd.DataFrame(columns=sheet_df.columns)
+            prior_struck, prior_highlight = set(), set()
+            repaired.append(ws.title)
+            # No prior rows left, so nothing can be cancelled on this pass.
+            full, stats, changes = merge_reservations_into_sheet(
+                cand, sheet_df, cancel_window=None, struck_rows=frozenset())
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             continue
@@ -270,10 +304,15 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     print("\n" + "#" * 60)
     print("  GRAND TOTAL across monthly tabs")
     print(f"    New {grand['new']} | Updated {grand['updated']} | Removed {grand['removed']} "
-          f"| Cancelled {grand['cancelled']} | Unchanged {grand['unchanged']} "
-          f"| Missing City {grand['missing_city']}")
+          f"| Cancelled {grand['cancelled']} | Moved {grand['moved']} "
+          f"| Unchanged {grand['unchanged']} | Missing City {grand['missing_city']}")
     if created:
         print("  Auto-created tabs: " + ", ".join(created))
+    if repaired:
+        print(("  Tabs repaired (shifted layout cleared + rebuilt): "
+               if not dry_run else
+               "  Tabs that WOULD be repaired (shifted layout cleared + rebuilt): ")
+              + ", ".join(repaired))
     if skipped:
         print("  Months with reservations but NO tab yet "
               "(will be auto-created on the live run):")
@@ -281,29 +320,37 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             print(f"    {ym}: {n} rows  ->  '{_spanish_tab(ym)}'")
     print("#" * 60)
 
-    _write_grand_summary(grand, skipped, created, will_write=(not dry_run))
+    _write_grand_summary(grand, skipped, created, repaired, will_write=(not dry_run))
 
     if dry_run:
-        print("\nDRY RUN: no tabs were created or modified.")
+        print("\nDRY RUN: no tabs were created, cleared or modified.")
     else:
         print(f"\nLIVE: wrote {n_written} monthly tab(s)"
-              + (f", auto-created {len(created)} new tab(s)." if created else "."))
+              + (f", auto-created {len(created)} new tab(s)" if created else "")
+              + (f", repaired {len(repaired)} shifted tab(s)" if repaired else "")
+              + ".")
     return 0
 
 
-def _write_grand_summary(grand: dict, skipped: list, created: list, will_write: bool) -> None:
+def _write_grand_summary(grand: dict, skipped: list, created: list, repaired: list,
+                         will_write: bool) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
     try:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(f"\n## GRAND TOTAL — {'LIVE (tabs written)' if will_write else 'DRY RUN'}\n\n")
-            fh.write("| New | Updated | Removed | Cancelled | Unchanged | Missing City |\n")
-            fh.write("|----:|--------:|--------:|----------:|----------:|-------------:|\n")
+            fh.write("| New | Updated | Removed | Cancelled | Moved | Unchanged | Missing City |\n")
+            fh.write("|----:|--------:|--------:|----------:|------:|----------:|-------------:|\n")
             fh.write(f"| {grand['new']} | {grand['updated']} | {grand['removed']} | "
-                     f"{grand['cancelled']} | {grand['unchanged']} | {grand['missing_city']} |\n")
+                     f"{grand['cancelled']} | {grand['moved']} | {grand['unchanged']} | "
+                     f"{grand['missing_city']} |\n")
             if created:
                 fh.write("\n**Auto-created tabs:** " + ", ".join(f"`{t}`" for t in created) + "\n")
+            if repaired:
+                fh.write(f"\n**Tabs {'repaired' if will_write else 'that would be repaired'} "
+                         "(shifted layout cleared + rebuilt):** "
+                         + ", ".join(f"`{t}`" for t in repaired) + "\n")
             if skipped:
                 fh.write("\n**Months with reservations but no tab yet "
                          "(auto-created on the live run):**\n")
@@ -344,6 +391,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     tag = f"[{label}] " if label else ""
     cols = ["Date", "Property", "Guest", "Confirmation Code", "T/O"]
     rcols = ["Date", "Property", "Guest", "Confirmation Code"]
+    mcols = rcols + ["Now at"]
 
     print("\n" + "=" * 60)
     print(f"  {tag}WHAT CHANGED  --  {verb}")
@@ -352,6 +400,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     print(f"  Updated rows    : {stats['updated']}  (highlighted)")
     print(f"  Removed rows    : {stats['removed']}")
     print(f"  Cancelled rows  : {stats.get('cancelled', 0)}  (struck through, kept in place)")
+    print(f"  Moved rows      : {stats.get('moved', 0)}  (reassigned in Guesty; old slot struck)")
     print(f"  Unchanged       : {stats['unchanged']}")
     print(f"  Total in sheet  : {stats['total_rows']}")
     print(f"  Missing City    : {stats['missing_city']}")
@@ -362,6 +411,8 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
           + _fmt_rows(changes["removed"], rcols))
     print("\n  --- Cancelled (no longer in Guesty -> struck through) ---\n"
           + _fmt_rows(changes.get("cancelled", []), rcols))
+    print("\n  --- Moved (same booking, new listing/date -> old slot struck) ---\n"
+          + _fmt_rows(changes.get("moved", []), mcols))
     if stats.get("cancel_guard_tripped"):
         print("\n  !! CANCELLATION GUARD: " + stats["cancel_guard_tripped"])
     if changes["missing_city_properties"]:
@@ -375,16 +426,19 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
         try:
             with open(summary_path, "a", encoding="utf-8") as fh:
                 fh.write(f"## {tag}Guesty → Sheet sync — {verb}\n\n")
-                fh.write(f"| New | Updated | Removed | Cancelled | Unchanged | Total | Missing City |\n")
-                fh.write(f"|----:|--------:|--------:|----------:|----------:|------:|-------------:|\n")
+                fh.write(f"| New | Updated | Removed | Cancelled | Moved | Unchanged | Total | Missing City |\n")
+                fh.write(f"|----:|--------:|--------:|----------:|------:|----------:|------:|-------------:|\n")
                 fh.write(f"| {stats['new']} | {stats['updated']} | {stats['removed']} | "
-                         f"{stats.get('cancelled', 0)} | {stats['unchanged']} | "
+                         f"{stats.get('cancelled', 0)} | {stats.get('moved', 0)} | "
+                         f"{stats['unchanged']} | "
                          f"{stats['total_rows']} | {stats['missing_city']} |\n\n")
                 fh.write("### New (highlighted)\n" + _md_table(changes["new"], cols))
                 fh.write("\n### Updated (highlighted)\n" + _md_table(changes["updated"], cols))
                 fh.write("\n### Removed (superseded)\n" + _md_table(changes["removed"], rcols))
                 fh.write("\n### Cancelled (struck through)\n"
                          + _md_table(changes.get("cancelled", []), rcols))
+                fh.write("\n### Moved (reassigned in Guesty; old slot struck)\n"
+                         + _md_table(changes.get("moved", []), mcols))
                 if stats.get("cancel_guard_tripped"):
                     fh.write("\n> ⚠️ **Cancellation guard tripped:** "
                              + stats["cancel_guard_tripped"] + "\n")

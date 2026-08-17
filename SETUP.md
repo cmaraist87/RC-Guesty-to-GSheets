@@ -79,6 +79,7 @@ Each run marks what it changed, so the ops team can see the day's delta at a gla
 |------|---------|
 | **Amber highlight** | the row was written by *this* run (new booking, or a booking whose times/guest changed). Yesterday's highlights are cleared first, so the fill always means "changed today". |
 | ~~**Strikethrough**~~ | the reservation is no longer in Guesty — cancelled. The row is **kept in place**, not deleted, so nobody loses context on a job that was already assigned. |
+| ~~**Strikethrough**~~ (*moved*) | same mark, but the booking wasn't cancelled — Guesty **reassigned** it to another listing or date. The old slot is just as dead, so it's struck; the new slot appears as a fresh highlighted row. The run report lists these separately under **Moved**, with a `Now at` column naming the listing and date the booking landed on. |
 
 Only `strikethrough` and `backgroundColor` are ever written, so checkbox validation,
 borders, fonts and column widths survive untouched. Struck rows stay struck on later
@@ -89,7 +90,27 @@ A **cancellation only counts inside the window the fetch covers**
 (`SYNC_LOOKBACK_DAYS` … `SYNC_LOOKAHEAD_DAYS`) — rows outside it are never struck.
 As a further guard, if one run would strike more than half of a tab's in-window rows
 (and more than 10), it strikes nothing and reports a warning instead: that pattern
-means a short Guesty fetch, not a mass cancellation.
+means a short Guesty fetch, not a mass cancellation. **Moved rows are exempt from that
+guard** in both directions: a reassigned booking proves the fetch did carry that
+reservation, so it never inflates the ratio, and it stays struck even when the guard
+trips on the rows around it.
+
+### Repairing a tab stuck on the old shifted layout
+Tabs written before the column-alignment fix have their data one column left of the
+header — the giveaway is a **check-out time sitting in the `Property` column**. Such a
+tab can't be merged into (nothing in it matches what the pipeline now produces), so the
+sync **skips it and says so** rather than making it worse.
+
+To fix one: **Actions → Guesty → Sheet daily sync → Run workflow**, tick
+**"One-off repair: CLEAR tabs stuck on the old shifted layout and rebuild them from
+Guesty"**, and untick **dry_run**. Every affected tab has its data rows (row 2 down)
+cleared — header, checkbox validation, widths and borders all survive — and the month is
+rebuilt from Guesty. Leave the box **unticked** afterwards; the scheduled 4 AM run never
+sees it, so the daily job can't clear a tab on its own.
+
+> This is destructive to manual edits on the affected tab: the rebuilt rows come back
+> with checkboxes unticked. Run it with **dry_run ticked first** to see which tabs it
+> would touch and how many rows it would clear.
 
 ### Safety toggle — going live
 By default the automatic daily run **does not write your sheet** — it runs as a dry-run so you

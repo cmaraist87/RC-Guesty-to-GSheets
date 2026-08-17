@@ -19,6 +19,7 @@ Returns:
 Row flags drive the visual diff the ops team asked for:
     "new" / "updated"  -> highlighted (this run wrote the row)
     "cancelled"        -> struck through for the first time this run
+    "moved"            -> same, but the reservation reappeared elsewhere in the month
     "struck"           -> already struck by an earlier run; leave as is
     ""                 -> untouched
 
@@ -33,13 +34,21 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
 from processing import _canonical_key
 
 SIGNATURE_COLS = {"Confirmation Code", "Guest", "Property", "Date"}
+
+
+class ShiftedLayoutError(ValueError):
+    """The tab's data sits one column left of its header (pre-fix write).
+
+    A distinct type so the caller can offer to repair the tab instead of only
+    reporting it -- every other layout complaint stays a plain ValueError.
+    """
 
 # Headers of the sheet's checkbox columns. Used only when the tab has no data rows
 # to inspect (an auto-created month tab), so TRUE/FALSE detection has nothing to go
@@ -108,6 +117,28 @@ def _date_key(v) -> str:
     return str(v).strip()[:10]
 
 
+def _nearest_destination(dests: list[tuple[str, str]], from_day: str) -> tuple[str, str]:
+    """Of the (Property, Date) slots a confirmation code now occupies, the one closest
+    in time to the row being struck -- that's the slot it most plausibly moved to.
+
+    A stay contributes both a check-out and a check-in row, so a code routinely has
+    two or more destinations; reporting the nearest keeps the operator's eye on the
+    one that replaced this row.
+    """
+    try:
+        base = date.fromisoformat(from_day)
+    except ValueError:
+        return dests[0]
+
+    def gap(dest: tuple[str, str]) -> int:
+        try:
+            return abs((date.fromisoformat(dest[1]) - base).days)
+        except ValueError:
+            return 10 ** 6
+
+    return min(dests, key=gap)
+
+
 def _is_checkbox_header(col) -> bool:
     """Does this column header name one of the sheet's checkbox columns?"""
     raw = str(col).strip()
@@ -134,7 +165,7 @@ def _reject_shifted_layout(sheet: pd.DataFrame) -> None:
     prop = sheet["Property"].astype(str).str.strip()
     prop = prop[prop != ""]
     if len(prop) and prop.map(lambda v: bool(_TIME_RE.match(v))).mean() > 0.5:
-        raise ValueError(
+        raise ShiftedLayoutError(
             "the Property column holds times, not addresses -- this tab was written "
             "with the old shifted layout. Clear its data rows (row 2 downwards) and "
             "re-run; the sync will repopulate the month correctly."
@@ -155,6 +186,12 @@ def merge_reservations_into_sheet(
         longer appears in `candidates` is treated as CANCELLED: kept in place and
         flagged for strikethrough rather than silently left behind. Pass None to
         disable cancellation detection entirely.
+
+        Such a row is reported as MOVED, not cancelled, when its confirmation code
+        turns up elsewhere in `candidates` -- Guesty reassigned the booking to
+        another listing or date. The sheet treatment is identical (old slot struck,
+        new slot appended); only the label and the guard maths differ, because a
+        move proves the fetch carried that reservation.
     struck_rows : 0-based positions of `sheet` rows an earlier run already struck
         through. They are excluded from matching (a re-booking must land as a new
         row) and are not re-reported as cancellations.
@@ -230,6 +267,7 @@ def merge_reservations_into_sheet(
     new_records, updated_records = [], []
     n_new = n_updated = n_unchanged = 0
     live_keys, live_canon = set(), set()
+    live_by_code: dict[str, list[tuple[str, str]]] = {}
     for j, c in candidates.iterrows():
         prop, day = str(c["Property"]).strip(), _date_key(c["Date"])
         key = (prop, day)
@@ -237,6 +275,11 @@ def merge_reservations_into_sheet(
         # Cosmetic spelling drift ("520 E Harris&CH" vs "520 E Harris CH") must not
         # read as a cancellation, so keep a canonical index alongside the exact one.
         live_canon.add((_canonical_key(prop), day))
+        # Where each confirmation code lives now -- used to tell a reassignment
+        # apart from a real cancellation.
+        code = str(c.get("Confirmation Code", "")).strip().upper()
+        if code:
+            live_by_code.setdefault(code, []).append(key)
         matches = existing_by_key.get(key)
         if not matches:
             keep_idx.append(j); carry_rows.append(None); append_flags.append("new")
@@ -257,7 +300,9 @@ def merge_reservations_into_sheet(
     # fully covers, whose (Property, Date) produced no candidate at all. The
     # reservation was cancelled (or the listing was excluded) upstream. Rows
     # superseded above are NOT cancellations -- their key is in `live_keys`.
+    # `moved_pos` is a subset of `cancelled_pos`: same strikethrough, different label.
     cancelled_pos: set[int] = set()
+    moved_pos: set[int] = set()
     guard_tripped = ""
     if cancel_window and len(sheet):
         lo, hi = cancel_window
@@ -271,16 +316,23 @@ def merge_reservations_into_sheet(
             in_window += 1
             if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
                 cancelled_pos.add(i)
+                if str(r["Confirmation Code"]).strip().upper() in live_by_code:
+                    moved_pos.add(i)
+
+        # The guard exists to catch a SHORT FETCH, where reservations vanish from the
+        # payload entirely. A moved row proves its reservation did arrive, so it must
+        # not inflate the ratio -- and it stays struck even if the guard trips.
+        gone = cancelled_pos - moved_pos
         max_ratio, min_count = cancel_guard
-        if (len(cancelled_pos) > min_count
-                and in_window
-                and len(cancelled_pos) / in_window > max_ratio):
+        if len(gone) > min_count and in_window and len(gone) / in_window > max_ratio:
             guard_tripped = (
-                f"{len(cancelled_pos)} of {in_window} in-window rows would be struck "
+                f"{len(gone)} of {in_window} in-window rows would be struck "
                 f"(> {max_ratio:.0%}); treating this as a short fetch, not a mass "
-                f"cancellation. Nothing struck on this tab."
+                f"cancellation. Nothing struck on this tab"
+                + (f" beyond {len(moved_pos)} confirmed reassignment(s)."
+                   if moved_pos else ".")
             )
-            cancelled_pos = set()
+            cancelled_pos = set(moved_pos)
 
     # Build new/updated rows aligned to the sheet's exact columns
     pipe_by_norm = {_norm(c): c for c in new_rows.columns}
@@ -325,7 +377,10 @@ def merge_reservations_into_sheet(
     # Where each carried-over row sat in the old sheet -- lets the writer tell an
     # already-highlighted row from one it must newly paint.
     kept_positions = [int(i) for i in kept_existing.index]
-    row_flags = ["cancelled" if p in cancelled_pos else "struck" if p in struck_rows else ""
+    row_flags = ["moved" if p in moved_pos
+                 else "cancelled" if p in cancelled_pos
+                 else "struck" if p in struck_rows
+                 else ""
                  for p in kept_positions] + append_flags
 
     full = (pd.concat([kept_existing, to_append], ignore_index=True)
@@ -354,13 +409,23 @@ def merge_reservations_into_sheet(
         and str(to_append.iloc[i].get("Property", "")).strip() != ""
     })
 
-    cancelled_records = [{
-        "Date": _date_key(sheet.at[i, "Date"]),
-        "Property": str(sheet.at[i, "Property"]).strip(),
-        "Guest": str(sheet.at[i, "Guest"]).strip(),
-        "Confirmation Code": str(sheet.at[i, "Confirmation Code"]).strip(),
-        "sheet_row": i + 2,
-    } for i in sorted(cancelled_pos)]
+    def _struck_rec(i: int) -> dict:
+        return {
+            "Date": _date_key(sheet.at[i, "Date"]),
+            "Property": str(sheet.at[i, "Property"]).strip(),
+            "Guest": str(sheet.at[i, "Guest"]).strip(),
+            "Confirmation Code": str(sheet.at[i, "Confirmation Code"]).strip(),
+            "sheet_row": i + 2,
+        }
+
+    cancelled_records = [_struck_rec(i) for i in sorted(cancelled_pos - moved_pos)]
+    moved_records = []
+    for i in sorted(moved_pos):
+        rec = _struck_rec(i)
+        prop, day = _nearest_destination(
+            live_by_code[rec["Confirmation Code"].upper()], rec["Date"])
+        rec["Now at"] = f"{prop}  {day}"
+        moved_records.append(rec)
 
     stats = {
         "existing_rows": len(sheet),
@@ -368,7 +433,8 @@ def merge_reservations_into_sheet(
         "updated": n_updated,
         "unchanged": n_unchanged,
         "removed": len(delete_rows),
-        "cancelled": len(cancelled_pos),
+        "cancelled": len(cancelled_pos) - len(moved_pos),
+        "moved": len(moved_pos),
         "cancel_guard_tripped": guard_tripped,
         "missing_city": missing_city,
         "total_rows": len(full),
@@ -378,6 +444,7 @@ def merge_reservations_into_sheet(
         "updated": updated_records,
         "removed": removed_records,
         "cancelled": cancelled_records,
+        "moved": moved_records,
         "missing_city_properties": missing_city_props,
         # Painting instructions for the writer (see the module docstring).
         "row_flags": row_flags,

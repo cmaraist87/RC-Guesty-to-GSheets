@@ -9,7 +9,7 @@ import pandas as pd
 
 from guesty_adapter import reservations_to_frames, requested_fields
 from processing import process_reservations
-from sheet_merge import merge_reservations_into_sheet
+from sheet_merge import ShiftedLayoutError, merge_reservations_into_sheet
 
 # --- Synthetic reservations shaped like the Guesty Open API payload -----------
 RESERVATIONS = [
@@ -84,7 +84,7 @@ def test_adapter_then_processing_then_merge():
 
     full, stats, changes = merge_reservations_into_sheet(out, existing)
     print("merge stats:", stats)
-    assert set(changes.keys()) == {"new", "updated", "removed", "cancelled",
+    assert set(changes.keys()) == {"new", "updated", "removed", "cancelled", "moved",
                                    "missing_city_properties", "row_flags",
                                    "kept_positions"}
     assert len(changes["new"]) == stats["new"]
@@ -209,6 +209,115 @@ def test_cancel_guard_blocks_a_short_fetch():
     print("OK: cancel guard blocks a mass strike -> " + stats["cancel_guard_tripped"])
 
 
+def _row(**over):
+    """One sheet row in the live 16-column layout."""
+    base = dict(zip(LIVE_HEADER,
+                    ["New Orleans", "Sunday", "2026-11-01", "HM00000000", "Guest",
+                     "FALSE", "Somewhere", "FALSE", "11:00 AM", "FALSE", "",
+                     "FALSE", "", "", "", ""]))
+    base.update(over)
+    return base
+
+
+def test_reassignment_is_reported_as_moved_not_cancelled():
+    """Guesty reassigns a booking to another listing. The old slot is still struck,
+    but calling it a cancellation misleads whoever reads the tab."""
+    existing = pd.DataFrame([
+        _row(**{"Date": "2026-11-12", "Confirmation Code": "HMMOVE0001",
+                "Guest": "Elizabeth Quam", "Property": "3930 Burgundy"}),
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMGONE0001",
+                "Guest": "Ghost Booking", "Property": "6 Lake"}),
+    ], columns=LIVE_HEADER).astype(str)
+
+    # The same code now sits at another listing -- twice, as any stay produces a
+    # check-out and a check-in row. 11-09 is nearer the struck 11-12 than 11-20.
+    moved_out = dict(CANDIDATE, Property="1405 Carondelet B", Guest="Elizabeth Quam",
+                     Date="2026-11-09", **{"Confirmation Code": "HMMOVE0001"})
+    moved_in = dict(moved_out, Date="2026-11-20")
+
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE, moved_out, moved_in]), existing,
+        cancel_window=("2026-10-01", "2026-12-31"))
+
+    assert stats["moved"] == 1, stats
+    assert stats["cancelled"] == 1, stats
+    # Only the vanished booking is called a cancellation.
+    assert [r["Confirmation Code"] for r in changes["cancelled"]] == ["HMGONE0001"]
+    mv = changes["moved"][0]
+    assert mv["Confirmation Code"] == "HMMOVE0001", mv
+    assert mv["Property"] == "3930 Burgundy", mv
+    assert "1405 Carondelet B" in mv["Now at"] and "2026-11-09" in mv["Now at"], mv
+    # Both old slots are struck -- a move is just as dead as a cancellation.
+    assert changes["row_flags"][:2] == ["moved", "cancelled"], changes["row_flags"]
+    assert len(full) == 5, full.to_string()  # 2 kept + 3 appended
+    print("OK: reassignment reported as moved (with its destination), still struck")
+
+
+def test_cancel_guard_counts_cancellations_but_not_moves():
+    """The guard catches a SHORT FETCH. A moved row proves its reservation did
+    arrive, so it must neither inflate the ratio nor be spared when the guard trips."""
+    existing = pd.DataFrame(
+        # 5 reassigned + 25 genuinely vanished = 30 in-window rows.
+        [_row(**{"Confirmation Code": f"HMMOVED{i:03d}", "Property": f"{i} Old Place"})
+         for i in range(5)]
+        + [_row(**{"Confirmation Code": f"HMGONE{i:04d}", "Property": f"{i} Somewhere"})
+           for i in range(25)],
+        columns=LIVE_HEADER).astype(str)
+    candidates = pd.DataFrame(
+        [dict(CANDIDATE, Property=f"{i} New Place",
+              **{"Confirmation Code": f"HMMOVED{i:03d}"}) for i in range(5)])
+
+    _, stats, changes = merge_reservations_into_sheet(
+        candidates, existing, cancel_window=("2026-10-01", "2026-12-31"))
+
+    # 25 of 30 would be struck as cancelled -> a short fetch, so none of them are.
+    assert stats["cancelled"] == 0, stats
+    assert stats["cancel_guard_tripped"], stats
+    # The 5 confirmed reassignments survive the guard and stay struck.
+    assert stats["moved"] == 5, stats
+    assert changes["row_flags"].count("moved") == 5, changes["row_flags"]
+    assert "reassignment" in stats["cancel_guard_tripped"], stats["cancel_guard_tripped"]
+    print("OK: guard blocks the mass strike, confirmed moves still struck")
+
+
+def test_moves_alone_never_trip_the_guard():
+    """A whole month of reassignments is not a short fetch -- every code came back."""
+    existing = pd.DataFrame(
+        [_row(**{"Confirmation Code": f"HMMOVED{i:03d}", "Property": f"{i} Old Place"})
+         for i in range(30)], columns=LIVE_HEADER).astype(str)
+    candidates = pd.DataFrame(
+        [dict(CANDIDATE, Property=f"{i} New Place",
+              **{"Confirmation Code": f"HMMOVED{i:03d}"}) for i in range(30)])
+
+    _, stats, _ = merge_reservations_into_sheet(
+        candidates, existing, cancel_window=("2026-10-01", "2026-12-31"))
+
+    assert not stats["cancel_guard_tripped"], stats
+    assert stats["moved"] == 30 and stats["cancelled"] == 0, stats
+    print("OK: 30 moves and zero cancellations leave the guard untripped")
+
+
+def test_shifted_layout_raises_a_typed_error():
+    """The pre-fix layout slid every column left of `Property`, so check-out times
+    landed in it. The caller needs to tell this apart from any other bad layout."""
+    shifted = pd.DataFrame([
+        _row(Property="11:00 AM"), _row(Property="04:00 PM"),
+    ], columns=LIVE_HEADER).astype(str)
+
+    try:
+        merge_reservations_into_sheet(pd.DataFrame([CANDIDATE]), shifted)
+    except ShiftedLayoutError as e:
+        assert isinstance(e, ValueError), "callers still catching ValueError must work"
+        assert "Property column holds times" in str(e), e
+    else:
+        raise AssertionError("a shifted tab must not merge")
+
+    # A tab whose Property column holds real addresses is left alone.
+    ok = pd.DataFrame([_row(Property="1022 Mandeville")], columns=LIVE_HEADER).astype(str)
+    merge_reservations_into_sheet(pd.DataFrame([CANDIDATE]), ok)
+    print("OK: shifted layout raises ShiftedLayoutError (a ValueError subclass)")
+
+
 def test_canonical_property_spelling_is_not_a_cancellation():
     existing = pd.DataFrame([
         dict(zip(LIVE_HEADER, ["Savannah", "Sunday", "2026-11-01", "HMDUFFY001",
@@ -233,5 +342,9 @@ if __name__ == "__main__":
     test_cancelled_rows_are_struck_not_deleted()
     test_rebooking_over_a_struck_row_lands_as_new()
     test_cancel_guard_blocks_a_short_fetch()
+    test_reassignment_is_reported_as_moved_not_cancelled()
+    test_cancel_guard_counts_cancellations_but_not_moves()
+    test_moves_alone_never_trip_the_guard()
+    test_shifted_layout_raises_a_typed_error()
     test_canonical_property_spelling_is_not_a_cancellation()
     print("\nALL TESTS PASSED")

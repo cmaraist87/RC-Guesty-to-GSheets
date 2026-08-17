@@ -15,6 +15,10 @@ on:
         description: "Dry run (fetch + merge, but do NOT write to the sheet)"
         type: boolean
         default: true
+      repair_shifted_tabs:
+        description: "One-off repair: CLEAR tabs stuck on the old shifted layout and rebuild them from Guesty"
+        type: boolean
+        default: false
 
 concurrency:
   group: guesty-sheet-sync
@@ -64,6 +68,9 @@ jobs:
           SYNC_LOOKAHEAD_DAYS: ${{ vars.SYNC_LOOKAHEAD_DAYS }}
           SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
           SYNC_MARK_CANCELLED: ${{ vars.SYNC_MARK_CANCELLED }}
+          # Manual dispatch only. On a scheduled run this expands to "" and sync.py
+          # treats a blank value as unset, so the daily job can never clear a tab.
+          SYNC_REPAIR_SHIFTED_TABS: ${{ github.event.inputs.repair_shifted_tabs }}
         shell: bash
         run: |
           # Decide dry-run vs live:
