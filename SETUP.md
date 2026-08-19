@@ -99,7 +99,12 @@ trips on the rows around it.
 Tabs written before the column-alignment fix have their data one column left of the
 header — the giveaway is a **check-out time sitting in the `Property` column**. Such a
 tab can't be merged into (nothing in it matches what the pipeline now produces), so the
-sync **skips it and says so** rather than making it worse.
+sync **skips it** rather than making it worse.
+
+A skipped tab produces no per-tab section in the run Summary, so the run opens with a
+⚠️ **warning block above the grand total** naming every skipped tab and how many
+reservations went unsynced — without it the Summary would read as though that month
+simply had nothing to do. **The totals exclude skipped tabs entirely.**
 
 To fix one: **Actions → Guesty → Sheet daily sync → Run workflow**, tick
 **"One-off repair: CLEAR tabs stuck on the old shifted layout and rebuild them from

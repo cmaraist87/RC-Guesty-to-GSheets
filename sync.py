@@ -226,6 +226,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
     created = []      # titles of tabs auto-created this run
     repaired = []     # titles of shifted-layout tabs rebuilt from scratch
+    # Tabs that exist but couldn't be merged into. These produce no per-tab report
+    # at all, so without collecting them here the run Summary would read as though
+    # the month simply had nothing to do -- see _write_grand_summary.
+    layout_skipped = []   # dicts: title, ym, rows, reason, repairable
     snapshots = []
     n_written = 0
 
@@ -257,6 +261,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
                 print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
+                layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),
+                                       "reason": str(e), "repairable": True})
                 continue
             # Nothing in a shifted tab can be matched, so the only repair is to drop
             # its rows and rebuild the month. The header (and every bit of formatting)
@@ -276,6 +282,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 cand, sheet_df, cancel_window=None, struck_rows=frozenset())
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
+            layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),
+                                   "reason": str(e), "repairable": False})
             continue
         for k in grand:
             grand[k] += stats.get(k, 0)
@@ -313,6 +321,15 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                if not dry_run else
                "  Tabs that WOULD be repaired (shifted layout cleared + rebuilt): ")
               + ", ".join(repaired))
+    if layout_skipped:
+        n_rows = sum(t["rows"] for t in layout_skipped)
+        print(f"  !! {len(layout_skipped)} TAB(S) SKIPPED -- {n_rows} reservation(s) "
+              f"had nowhere to go:")
+        for t in sorted(layout_skipped, key=lambda t: t["ym"]):
+            print(f"    '{t['title']}': {t['rows']} rows not synced -- {t['reason']}")
+        if any(t["repairable"] for t in layout_skipped) and not cfg.get("repair_shifted"):
+            print("    Re-run with SYNC_REPAIR_SHIFTED_TABS=1 to rebuild the shifted "
+                  "tab(s) from Guesty.")
     if skipped:
         print("  Months with reservations but NO tab yet "
               "(will be auto-created on the live run):")
@@ -320,26 +337,47 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             print(f"    {ym}: {n} rows  ->  '{_spanish_tab(ym)}'")
     print("#" * 60)
 
-    _write_grand_summary(grand, skipped, created, repaired, will_write=(not dry_run))
+    _write_grand_summary(grand, skipped, created, repaired, layout_skipped,
+                         will_write=(not dry_run),
+                         repair_on=bool(cfg.get("repair_shifted")))
 
+    tail = (f" {len(layout_skipped)} tab(s) were SKIPPED and are unchanged."
+            if layout_skipped else "")
     if dry_run:
-        print("\nDRY RUN: no tabs were created, cleared or modified.")
+        print("\nDRY RUN: no tabs were created, cleared or modified." + tail)
     else:
         print(f"\nLIVE: wrote {n_written} monthly tab(s)"
               + (f", auto-created {len(created)} new tab(s)" if created else "")
               + (f", repaired {len(repaired)} shifted tab(s)" if repaired else "")
-              + ".")
+              + "." + tail)
     return 0
 
 
 def _write_grand_summary(grand: dict, skipped: list, created: list, repaired: list,
-                         will_write: bool) -> None:
+                         layout_skipped: list, will_write: bool,
+                         repair_on: bool = False) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
     try:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(f"\n## GRAND TOTAL — {'LIVE (tabs written)' if will_write else 'DRY RUN'}\n\n")
+            # First thing in the section: a skipped tab produces no per-tab report of
+            # its own, so this warning is the ONLY place its month appears. Without it
+            # the Summary reads as if that month had nothing to sync.
+            if layout_skipped:
+                n_rows = sum(t["rows"] for t in layout_skipped)
+                fh.write(f"> [!WARNING]\n> **{len(layout_skipped)} tab(s) skipped — "
+                         f"{n_rows} reservation(s) were NOT synced.**\n> "
+                         "These tabs exist but could not be merged into, so the totals "
+                         "below exclude them entirely.\n\n")
+                fh.write("| Tab | Rows not synced | Why |\n|---|----:|---|\n")
+                for t in sorted(layout_skipped, key=lambda t: t["ym"]):
+                    fh.write(f"| `{t['title']}` | {t['rows']} | {t['reason']} |\n")
+                if any(t["repairable"] for t in layout_skipped) and not repair_on:
+                    fh.write("\nRe-run this workflow with the **repair** checkbox ticked "
+                             "to clear the shifted tab(s) and rebuild them from Guesty.\n")
+                fh.write("\n")
             fh.write("| New | Updated | Removed | Cancelled | Moved | Unchanged | Missing City |\n")
             fh.write("|----:|--------:|--------:|----------:|------:|----------:|-------------:|\n")
             fh.write(f"| {grand['new']} | {grand['updated']} | {grand['removed']} | "

@@ -3,7 +3,9 @@ Offline test of per-month tab routing (no network) using a mocked spreadsheet.
 
 Run: python test_monthly_routing.py
 """
+import os
 import re
+import tempfile
 
 import sheets_client
 import sync
@@ -199,6 +201,53 @@ def test_shifted_tab_repair_clears_and_rebuilds():
     print("OK: shifted tab cleared, month rebuilt, columns back in their header slots")
 
 
+def _summary_of(run) -> str:
+    """Run `run()` with GITHUB_STEP_SUMMARY pointed at a temp file; return what it wrote."""
+    fd, path = tempfile.mkstemp(suffix=".md")
+    os.close(fd)
+    prev = os.environ.get("GITHUB_STEP_SUMMARY")
+    os.environ["GITHUB_STEP_SUMMARY"] = path
+    try:
+        run()
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    finally:
+        if prev is None:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        else:
+            os.environ["GITHUB_STEP_SUMMARY"] = prev
+        os.unlink(path)
+
+
+def test_skipped_tab_is_reported_in_the_step_summary():
+    """A skipped tab writes no per-tab report, so the grand-total warning is the ONLY
+    place its month shows up. Silence there reads as 'nothing to sync' -- the bug."""
+    summary = _summary_of(lambda: _run_against_shifted_tab(repair=False))
+
+    assert "[!WARNING]" in summary, summary
+    assert "1 tab(s) skipped" in summary, summary
+    # The month's reservations went nowhere; the count has to say so. The one
+    # reservation contributes two rows -- its check-out and its check-in.
+    assert "2 reservation(s) were NOT synced" in summary, summary
+    assert "`Agosto 2026`" in summary, summary
+    assert "Property column holds times" in summary, summary
+    # ... and it must point at the way out.
+    assert "repair" in summary.lower(), summary
+    # The warning precedes the totals, so nobody reads the numbers first.
+    assert summary.index("[!WARNING]") < summary.index("| New |"), summary
+    print("OK: skipped tab surfaces as a warning above the grand total")
+
+
+def test_repaired_tab_is_not_reported_as_skipped():
+    """Once the tab is repaired it syncs normally -- no leftover warning."""
+    summary = _summary_of(lambda: _run_against_shifted_tab(repair=True))
+
+    assert "[!WARNING]" not in summary, summary
+    assert "NOT synced" not in summary, summary
+    assert "repaired" in summary.lower(), summary
+    print("OK: a repaired tab raises no skipped-tab warning")
+
+
 class RecordingSS:
     """Minimal spreadsheet stand-in that captures batch_update payloads."""
 
@@ -270,6 +319,8 @@ if __name__ == "__main__":
     test_shifted_tab_is_skipped_without_the_flag()
     test_shifted_tab_dry_run_does_not_clear()
     test_shifted_tab_repair_clears_and_rebuilds()
+    test_skipped_tab_is_reported_in_the_step_summary()
+    test_repaired_tab_is_not_reported_as_skipped()
 
     # Build fake workbook: Agosto has one existing (unchanged) row, Julio empty-ish,
     # plus a non-month tab that must be ignored. No September tab on purpose.
