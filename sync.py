@@ -230,6 +230,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     # at all, so without collecting them here the run Summary would read as though
     # the month simply had nothing to do -- see _write_grand_summary.
     layout_skipped = []   # dicts: title, ym, rows, reason, repairable
+    # Every property with no City, across every tab. The per-tab lists are capped
+    # for readability, which hid the true size of the gap (one tab reported 391 and
+    # showed 50), so the whole set is reported once at the end instead.
+    missing_city_props: set[str] = set()
     snapshots = []
     n_written = 0
 
@@ -293,6 +297,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             continue
         for k in grand:
             grand[k] += stats.get(k, 0)
+        missing_city_props.update(changes["missing_city_properties"])
         emit_change_report(stats, changes, will_write=(not dry_run), label=ws.title)
         snap = full.copy(); snap.insert(0, "_tab", ws.title)
         snap.insert(1, "_mark", changes["row_flags"]); snapshots.append(snap)
@@ -343,9 +348,14 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             print(f"    {ym}: {n} rows  ->  '{_spanish_tab(ym)}'")
     print("#" * 60)
 
+    if missing_city_props:
+        print(f"  {len(missing_city_props)} distinct propertie(s) have no City "
+              "-- see the paste-ready list in the run Summary.")
+
     _write_grand_summary(grand, skipped, created, repaired, layout_skipped,
                          will_write=(not dry_run),
-                         repair_on=bool(cfg.get("repair_shifted")))
+                         repair_on=bool(cfg.get("repair_shifted")),
+                         missing_city_props=missing_city_props)
 
     tail = (f" {len(layout_skipped)} tab(s) were SKIPPED and are unchanged."
             if layout_skipped else "")
@@ -361,7 +371,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
 
 def _write_grand_summary(grand: dict, skipped: list, created: list, repaired: list,
                          layout_skipped: list, will_write: bool,
-                         repair_on: bool = False) -> None:
+                         repair_on: bool = False,
+                         missing_city_props: set | None = None) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -400,6 +411,18 @@ def _write_grand_summary(grand: dict, skipped: list, created: list, repaired: li
                          "(auto-created on the live run):**\n")
                 for ym, n in sorted(skipped):
                     fh.write(f"- {ym}: {n} rows -> `{_spanish_tab(ym)}`\n")
+            if missing_city_props:
+                # Paste-ready and COMPLETE -- the per-tab lists above are capped, so
+                # this is the only place the whole gap is visible. Collapsed because
+                # it can run to hundreds of lines.
+                props = sorted(missing_city_props)
+                fh.write(f"\n<details><summary><b>{len(props)} propertie(s) with no "
+                         "City</b> — click to expand, then fill in the city and paste "
+                         "into <code>property_to_city.csv</code></summary>\n\n")
+                fh.write("```csv\n")
+                for p in props:
+                    fh.write(f"{p},\n")
+                fh.write("```\n\n</details>\n")
     except OSError:
         pass
 
@@ -487,9 +510,16 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
                     fh.write("\n> ⚠️ **Cancellation guard tripped:** "
                              + stats["cancel_guard_tripped"] + "\n")
                 if changes["missing_city_properties"]:
+                    # Per-tab list stays capped -- the complete, deduplicated set is
+                    # emitted once in the grand total, ready to paste into the CSV.
+                    shown = changes["missing_city_properties"][:50]
                     fh.write("\n### Properties missing City (add to property_to_city.csv)\n")
-                    for p in changes["missing_city_properties"][:50]:
+                    for p in shown:
                         fh.write(f"- {p}\n")
+                    extra = len(changes["missing_city_properties"]) - len(shown)
+                    if extra > 0:
+                        fh.write(f"- _…and {extra} more — see the full list under "
+                                 "GRAND TOTAL_\n")
         except OSError:
             pass
 
