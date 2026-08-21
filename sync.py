@@ -196,7 +196,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
 
     from sheets_client import (open_spreadsheet, month_worksheets, read_as_dataframe,
                                read_row_marks, write_dataframe, create_month_tab,
-                               clear_data_rows)
+                               clear_data_rows, read_checkbox_columns)
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
     if not month_ws:
@@ -252,11 +252,16 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 continue
         sheet_df, header_raw = read_as_dataframe(ws)
         prior_struck, prior_highlight = read_row_marks(ws)
+        # Which columns really are checkboxes, per the tab's own data-validation.
+        # Empty (unreadable tab, or none defined) -> merge falls back to guessing.
+        cb_cols = frozenset(sheet_df.columns[j] for j in read_checkbox_columns(ws)
+                            if j < len(sheet_df.columns))
         try:
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df,
                 cancel_window=tab_cancel_window(cancel_window, ym),
                 struck_rows=prior_struck,
+                validated_checkboxes=cb_cols or None,
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
@@ -279,7 +284,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             repaired.append(ws.title)
             # No prior rows left, so nothing can be cancelled on this pass.
             full, stats, changes = merge_reservations_into_sheet(
-                cand, sheet_df, cancel_window=None, struck_rows=frozenset())
+                cand, sheet_df, cancel_window=None, struck_rows=frozenset(),
+                validated_checkboxes=cb_cols or None)
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),

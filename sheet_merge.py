@@ -139,6 +139,28 @@ def _nearest_destination(dests: list[tuple[str, str]], from_day: str) -> tuple[s
     return min(dests, key=gap)
 
 
+def _carry_checkbox(carry, col) -> str:
+    """The tick a re-written row inherits, ORed across every existing row it replaces.
+
+    One (Property, Date) slot can hold duplicate rows -- Agosto 2026 had ~75 -- and
+    all of them are dropped in favour of the single new row. Carrying only the first
+    would silently discard a tick the team had set on a later copy, so a TRUE
+    anywhere in the group wins. `carry` is None for a genuinely new row.
+    """
+    if carry is None:
+        return "FALSE"
+    seen = ""
+    for row in carry:
+        if col not in row.index:
+            continue
+        v = str(row[col]).strip()
+        if v.upper() == "TRUE":
+            return "TRUE"
+        if v:
+            seen = v  # keep a non-blank non-TRUE value (FALSE, or free text)
+    return seen or "FALSE"
+
+
 def _is_checkbox_header(col) -> bool:
     """Does this column header name one of the sheet's checkbox columns?"""
     raw = str(col).strip()
@@ -179,6 +201,7 @@ def merge_reservations_into_sheet(
     cancel_window: tuple[str, str] | None = None,
     struck_rows: set | frozenset = frozenset(),
     cancel_guard: tuple[float, int] = (0.5, 10),
+    validated_checkboxes: frozenset[str] | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -200,6 +223,11 @@ def merge_reservations_into_sheet(
         `min_count` of them, the whole month almost certainly went missing because
         the fetch came back short -- not because guests cancelled overnight. No
         rows are struck and `stats["cancel_guard_tripped"]` is set instead.
+    validated_checkboxes : names of the columns the TAB ITSELF reports as carrying
+        checkbox data-validation (see sheets_client.read_checkbox_columns). When
+        given, these are the checkbox columns -- no guessing from header names or
+        from the TRUE/FALSE values that happen to be present. Pass None (or an empty
+        set, which is what an unreadable tab yields) to fall back to that heuristic.
     """
     candidates = candidates.copy()
 
@@ -288,7 +316,9 @@ def merge_reservations_into_sheet(
         csig = sig(c, "Check-out Time", "Check-in Time")
         if any(m["sig"] == csig for m in matches):
             n_unchanged += 1; continue
-        keep_idx.append(j); carry_rows.append(matches[0]["data"])
+        # EVERY match is dropped in favour of this one row (see delete_rows below),
+        # so the ticks of all of them have to be carried, not just the first one's.
+        keep_idx.append(j); carry_rows.append([m["data"] for m in matches])
         append_flags.append("updated"); n_updated += 1
         updated_records.append(_rec(c))
         delete_rows.extend(matches)
@@ -343,6 +373,10 @@ def merge_reservations_into_sheet(
     def is_checkbox(col):
         if pipe_by_norm.get(_norm(col)) is not None:
             return False  # a real data column, never a checkbox
+        if validated_checkboxes:
+            # The tab told us which columns carry checkbox validation. Trust it over
+            # any guess -- it is the same fact, read instead of inferred.
+            return col in validated_checkboxes
         v = sheet[col].astype(str).str.strip() if len(sheet) else pd.Series(dtype=str)
         v = v[v != ""]
         if len(v):
@@ -357,11 +391,7 @@ def merge_reservations_into_sheet(
         if src is not None:
             to_append[col] = new_rows[src].values
         elif col in checkbox_cols:
-            vals = []
-            for carry in carry_rows:
-                old = str(carry[col]).strip() if (carry is not None and col in carry.index) else ""
-                vals.append(old if old else "FALSE")
-            to_append[col] = vals
+            to_append[col] = [_carry_checkbox(carry, col) for carry in carry_rows]
 
     # Full corrected sheet = kept existing (minus superseded + empty filler) + new/updated
     delete_row_nums = {m["row"] for m in delete_rows}

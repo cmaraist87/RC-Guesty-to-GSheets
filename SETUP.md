@@ -117,6 +117,27 @@ sees it, so the daily job can't clear a tab on its own.
 > with checkboxes unticked. Run it with **dry_run ticked first** to see which tabs it
 > would touch and how many rows it would clear.
 
+### Checkbox columns — the team keeps editing in the same tabs
+`assigned` / `Verified` / `OUT` / `IN` stay in the synced tabs; there is **no separate
+working sheet to reconcile**. Ticks survive a run because:
+
+- Only cell **values** are written, so the checkbox data-validation is never touched.
+- Values go in as `USER_ENTERED`, so `TRUE`/`FALSE` land as real booleans (a ticked or
+  unticked box), not as text that would break the widget.
+- When a row is rewritten because its times or guest changed, its existing ticks are
+  **carried onto the new row**. If several duplicate rows share one (Property, Date),
+  a tick on **any** of them survives the collapse into the single new row.
+- A genuinely new row starts with all four boxes unticked.
+
+Which columns count as checkboxes is read from **the tab's own data-validation**, so
+renaming them (`Assigned To`, `Cleaned?`, …) or adding a fifth keeps working — nothing
+is hardcoded. If that read fails, the sync falls back to recognising the four names above.
+
+**One case does lose ticks, by design:** when Guesty moves a booking to another listing
+or date, the old slot is struck and the booking reappears as a fresh, unticked row. The
+work has to be re-verified at the new location, so a carried-over `Verified` tick would
+hide real work. A pure listing *rename* is treated the same way.
+
 ### Safety toggle — going live
 By default the automatic daily run **does not write your sheet** — it runs as a dry-run so you
 can watch a few mornings safely. When you're confident:

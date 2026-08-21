@@ -297,6 +297,61 @@ def test_moves_alone_never_trip_the_guard():
     print("OK: 30 moves and zero cancellations leave the guard untripped")
 
 
+def test_duplicate_rows_do_not_lose_a_tick():
+    """One (Property, Date) slot can hold several rows -- Agosto 2026 had ~75 dupes.
+    All of them are dropped for the single re-written row, so a tick set on ANY of
+    them has to survive; carrying only the first silently loses the team's work."""
+    dupes = pd.DataFrame([
+        # The tick sits on the SECOND copy, and on a different column of the third.
+        _row(**{"Property": "1022 Mandeville", "Confirmation Code": "HM2HTCNFT5",
+                "Guest": "James Cull", "Check out - Time": "09:00 AM"}),
+        _row(**{"Property": "1022 Mandeville", "Confirmation Code": "HM2HTCNFT5",
+                "Guest": "James Cull", "Check out - Time": "09:00 AM",
+                "assigned": "TRUE"}),
+        _row(**{"Property": "1022 Mandeville", "Confirmation Code": "HM2HTCNFT5",
+                "Guest": "James Cull", "Check out - Time": "09:00 AM",
+                "OUT": "TRUE"}),
+    ], columns=LIVE_HEADER).astype(str)
+
+    # Same slot, but a changed check-out time -> an "updated" row supersedes all three.
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), dupes)
+
+    assert stats["updated"] == 1 and stats["removed"] == 3, stats
+    assert len(full) == 1, full.to_string()
+    row = full.iloc[0]
+    assert row["assigned"] == "TRUE", "a tick on the 2nd duplicate must survive"
+    assert row["OUT"] == "TRUE", "a tick on the 3rd duplicate must survive too"
+    assert row["Verified"] == "FALSE" and row["IN"] == "FALSE", row.to_dict()
+    print("OK: ticks are ORed across duplicate rows, not taken from the first only")
+
+
+def test_validated_checkbox_columns_beat_the_header_guess():
+    """When the tab reports which columns carry checkbox validation, that wins over
+    the hardcoded name list -- so oddly-named checkbox columns still work."""
+    header = ["City", "Day", "Date", "Confirmation Code", "Guest", "Assigned To",
+              "Property", "Verified By", "Check out - Time", "Cleaned?",
+              "Check-in Time", "Keys Returned", "T/O", "Adjustments", "", ""]
+    empty = pd.DataFrame(columns=header)
+    odd = {"Assigned To", "Verified By", "Cleaned?", "Keys Returned"}
+
+    # Without the hint, none of these names are in CHECKBOX_HEADER_NAMES.
+    guessed = merge_reservations_into_sheet(pd.DataFrame([CANDIDATE]), empty)[0].iloc[0]
+    assert all(guessed[c] == "" for c in odd), guessed.to_dict()
+
+    # With it, every one of them is written as an unticked checkbox.
+    told = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), empty,
+        validated_checkboxes=frozenset(odd))[0].iloc[0]
+    assert all(told[c] == "FALSE" for c in odd), told.to_dict()
+    # A pipeline data column is never stolen, even if the sheet marks it validated.
+    still_data = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), empty,
+        validated_checkboxes=frozenset(odd | {"Property"}))[0].iloc[0]
+    assert still_data["Property"] == "1022 Mandeville", still_data.to_dict()
+    print("OK: the tab's own checkbox validation overrides the header-name guess")
+
+
 def test_shifted_layout_raises_a_typed_error():
     """The pre-fix layout slid every column left of `Property`, so check-out times
     landed in it. The caller needs to tell this apart from any other bad layout."""
@@ -345,6 +400,8 @@ if __name__ == "__main__":
     test_reassignment_is_reported_as_moved_not_cancelled()
     test_cancel_guard_counts_cancellations_but_not_moves()
     test_moves_alone_never_trip_the_guard()
+    test_duplicate_rows_do_not_lose_a_tick()
+    test_validated_checkbox_columns_beat_the_header_guess()
     test_shifted_layout_raises_a_typed_error()
     test_canonical_property_spelling_is_not_a_cancellation()
     print("\nALL TESTS PASSED")

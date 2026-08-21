@@ -221,6 +221,45 @@ def read_row_marks(ws) -> tuple[set[int], set[int]]:
     return struck, highlighted
 
 
+def read_checkbox_columns(ws, probe_rows: int = 25) -> set[int]:
+    """
+    0-based column indices whose cells carry Sheets' checkbox (BOOLEAN) data
+    validation -- read from the tab itself instead of guessed from header names or
+    the TRUE/FALSE values that happen to be sitting there.
+
+    A band of data rows is sampled rather than one: a row's validation can be
+    cleared by hand, and a freshly duplicated tab may only carry the template's
+    validation part of the way down. A column counts if ANY probed row has it.
+
+    Returns an empty set when the workbook can't be queried (offline tests, fakes)
+    or when the tab genuinely has no checkboxes -- either way the caller falls back
+    to its own heuristic, so this can only ever improve the guess.
+    """
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
+        return set()
+    params = {
+        "includeGridData": "true",
+        "ranges": [f"'{ws.title}'!2:{probe_rows + 1}"],
+        "fields": "sheets(data(rowData(values(dataValidation/condition/type))))",
+    }
+    try:
+        meta = ss.fetch_sheet_metadata(params)
+    except Exception as e:  # noqa: BLE001 - fall back to the heuristic, never fail
+        print(f"   (could not read checkbox validation on '{ws.title}': {e})")
+        return set()
+
+    sheets = meta.get("sheets") or []
+    data = ((sheets[0].get("data") or [{}])[0] if sheets else {})
+    cols = set()
+    for rd in data.get("rowData") or []:
+        for j, cell in enumerate(rd.get("values") or []):
+            cond = (cell.get("dataValidation") or {}).get("condition") or {}
+            if cond.get("type") == "BOOLEAN":
+                cols.add(j)
+    return cols
+
+
 def _runs(indices) -> list[tuple[int, int]]:
     """[1,2,3,7,8] -> [(1,3), (7,8)] -- contiguous blocks, so one request each."""
     out: list[list[int]] = []
