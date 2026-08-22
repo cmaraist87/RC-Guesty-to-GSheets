@@ -74,6 +74,24 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `SYNC_LISTING_CITIES` | *(off)* | Set `1` to resolve **City** from Guesty's listings (one extra call per run) instead of relying on `property_to_city.csv`. Fail-soft: if the call errors, the run continues on the CSV alone. |
 | `SYNC_FIELDS_MODE` | `objects` | Diagnostic. `paths` asks Guesty for dotted field paths (`listing.address.city`). The live API **rejected** this on 2026-08-21 and the run failed, so leave it unset unless you are testing. |
 
+### Only five markets reach the sheet
+`New Orleans`, `Bay St. Louis`, `Austin`, `Savannah`, `Thunderbolt`. Guesty holds
+listings well outside these; those reservations are **dropped before any tab is
+touched** and listed in the run log with their city, row count and properties.
+
+Set `SYNC_CITIES` (comma-separated) to change the list. Matching ignores case,
+punctuation and `St.`/`Saint`, so `bay saint louis` matches `Bay St. Louis`.
+
+A row whose City is **blank** is dropped too — scope can't be confirmed — and reported
+separately. Excluded properties (`EXCLUDE_PROPERTIES` in `processing.py`) are removed
+earlier still, so they never reach the filter.
+
+Existing sheet rows for a dropped market are **left exactly as they are**, never struck:
+they produced no candidate because the market is out of scope, not because a guest
+cancelled. They appear under **Out of scope** in the report so you can delete them
+deliberately. This also stops 70-odd such rows tripping the short-fetch guard and
+suppressing the real cancellations.
+
 ### Where the City column comes from
 Priority, highest first: the reservation's own `LISTING'S CITY` → the Guesty listings
 lookup (`SYNC_LISTING_CITIES=1`) → `property_to_city.csv` at merge time. The CSV is

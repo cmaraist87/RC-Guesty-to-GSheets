@@ -161,6 +161,18 @@ def _carry_checkbox(carry, col) -> str:
     return seen or "FALSE"
 
 
+def norm_city(v) -> str:
+    """Canonical form for comparing city names.
+
+    Case, punctuation and spacing drift between Guesty and the sheet ("Bay St. Louis"
+    / "Bay St Louis" / "bay saint louis"), and a city that fails to match silently
+    drops a whole market's rows, so the comparison is deliberately forgiving.
+    """
+    s = str(v).strip().casefold().replace(".", " ")
+    s = " ".join(s.split())
+    return s.replace("saint ", "st ")
+
+
 def _is_checkbox_header(col) -> bool:
     """Does this column header name one of the sheet's checkbox columns?"""
     raw = str(col).strip()
@@ -202,6 +214,7 @@ def merge_reservations_into_sheet(
     struck_rows: set | frozenset = frozenset(),
     cancel_guard: tuple[float, int] = (0.5, 10),
     validated_checkboxes: frozenset[str] | None = None,
+    allowed_cities: frozenset[str] | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -228,6 +241,11 @@ def merge_reservations_into_sheet(
         given, these are the checkbox columns -- no guessing from header names or
         from the TRUE/FALSE values that happen to be present. Pass None (or an empty
         set, which is what an unreadable tab yields) to fall back to that heuristic.
+    allowed_cities : the cities this sheet covers. Existing rows for any OTHER city
+        are left alone rather than struck -- they produced no candidate because the
+        market is out of scope, not because a guest cancelled -- and are reported
+        under `changes["out_of_scope"]` for deliberate deletion. Candidates are
+        expected to be filtered upstream; this only governs the existing rows.
     """
     candidates = candidates.copy()
 
@@ -339,7 +357,10 @@ def merge_reservations_into_sheet(
     # `moved_pos` is a subset of `cancelled_pos`: same strikethrough, different label.
     cancelled_pos: set[int] = set()
     moved_pos: set[int] = set()
+    out_of_scope_pos: set[int] = set()
     guard_tripped = ""
+    allowed = frozenset(norm_city(c) for c in (allowed_cities or ()))
+    has_city = "City" in sheet.columns
     if cancel_window and len(sheet):
         lo, hi = cancel_window
         in_window = 0
@@ -348,6 +369,14 @@ def merge_reservations_into_sheet(
                 continue
             prop, d = str(r["Property"]).strip(), _date_key(r["Date"])
             if not prop or not (lo <= d <= hi):
+                continue
+            # A row for a city this sheet no longer covers produced no candidate by
+            # definition. Striking it would label an out-of-scope property as a
+            # CANCELLED booking, which is simply untrue -- and 70-odd such rows would
+            # trip the short-fetch guard and suppress the real cancellations too.
+            # Report them separately so they can be deleted deliberately.
+            if allowed and has_city and norm_city(r["City"]) not in allowed:
+                out_of_scope_pos.add(i)
                 continue
             in_window += 1
             if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
@@ -455,6 +484,11 @@ def merge_reservations_into_sheet(
         }
 
     cancelled_records = [_struck_rec(i) for i in sorted(cancelled_pos - moved_pos)]
+    out_of_scope_records = []
+    for i in sorted(out_of_scope_pos):
+        rec = _struck_rec(i)
+        rec["City"] = str(sheet.at[i, "City"]).strip() if has_city else ""
+        out_of_scope_records.append(rec)
     moved_records = []
     for i in sorted(moved_pos):
         rec = _struck_rec(i)
@@ -471,6 +505,7 @@ def merge_reservations_into_sheet(
         "removed": len(delete_rows),
         "cancelled": len(cancelled_pos) - len(moved_pos),
         "moved": len(moved_pos),
+        "out_of_scope": len(out_of_scope_pos),
         "cancel_guard_tripped": guard_tripped,
         "missing_city": missing_city,
         "total_rows": len(full),
@@ -481,6 +516,7 @@ def merge_reservations_into_sheet(
         "removed": removed_records,
         "cancelled": cancelled_records,
         "moved": moved_records,
+        "out_of_scope": out_of_scope_records,
         "missing_city_properties": missing_city_props,
         # Painting instructions for the writer (see the module docstring).
         "row_flags": row_flags,

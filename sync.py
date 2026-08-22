@@ -48,7 +48,14 @@ import pandas as pd
 
 from guesty_adapter import reservations_to_frames, requested_fields, FIELD_MAP, _dig
 from processing import process_reservations
-from sheet_merge import ShiftedLayoutError, merge_reservations_into_sheet
+from sheet_merge import ShiftedLayoutError, merge_reservations_into_sheet, norm_city
+
+# The markets this sheet covers. Guesty holds listings well outside them (Phoenix,
+# New England); those reservations are not this team's work and must never reach a
+# tab. Until the City lookup was fixed, property_to_city.csv was accidentally doing
+# this job -- an unlisted property got a blank City and stood out -- so the filter
+# has to be explicit now that every reservation arrives with a real city.
+DEFAULT_CITIES = ("New Orleans", "Bay St. Louis", "Austin", "Savannah", "Thunderbolt")
 
 # Local snapshot of what was (or would be) written to the sheet. Deliberately NOT
 # "sheet_updated.csv" so automated runs never clobber the notebook's own output.
@@ -102,6 +109,8 @@ def load_config() -> dict:
                           not in ("0", "false", "no", "off"),
         "repair_shifted": _env("SYNC_REPAIR_SHIFTED_TABS", "0").lower()
                           in ("1", "true", "yes", "on"),
+        "cities": tuple(c.strip() for c in _env(
+            "SYNC_CITIES", ",".join(DEFAULT_CITIES)).split(",") if c.strip()),
     }
 
 
@@ -281,12 +290,85 @@ def listing_city_seed(cfg: dict) -> dict:
         return {}
 
 
+def filter_to_cities(candidates: pd.DataFrame, cities) -> pd.DataFrame:
+    """
+    Keep only rows whose City is one this sheet covers, and say what was dropped.
+
+    Guesty carries listings in markets this team does not service. Those rows are
+    not "missing a city" -- they are somebody else's work, and they were only ever
+    kept out by accident: an unlisted property got a blank City, which looked like a
+    data gap. Now that every reservation arrives with a real city, the exclusion has
+    to be stated outright.
+
+    Rows with a BLANK city are dropped too, and reported separately: a row whose
+    market cannot be confirmed must not be assumed in scope.
+    """
+    if "City" not in candidates.columns or candidates.empty:
+        return candidates
+    allowed = {norm_city(c) for c in cities}
+    keys = candidates["City"].map(norm_city)
+    keep = keys.isin(allowed)
+
+    print(f"\n--- City filter: {', '.join(cities)} ---")
+    print(f"  Kept {int(keep.sum())} of {len(candidates)} row(s).")
+    dropped = candidates.loc[~keep]
+    if len(dropped):
+        blank = dropped[keys[~keep] == ""]
+        named = dropped[keys[~keep] != ""]
+        for city, grp in sorted(named.groupby(named["City"].str.strip()),
+                                key=lambda kv: -len(kv[1])):
+            props = sorted(set(grp["Property"].astype(str).str.strip()))
+            print(f"    {len(grp):5d} row(s)  {city}  ({len(props)} propertie(s))")
+            for p in props[:8]:
+                print(f"             - {p}")
+            if len(props) > 8:
+                print(f"             ... and {len(props) - 8} more")
+        if len(blank):
+            props = sorted(set(blank["Property"].astype(str).str.strip()))
+            print(f"    {len(blank):5d} row(s)  (NO CITY -- dropped, cannot confirm "
+                  f"scope): {', '.join(props[:8])}"
+                  + (f" ... and {len(props) - 8} more" if len(props) > 8 else ""))
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path and len(dropped):
+        try:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n**City filter:** kept {int(keep.sum())} of "
+                         f"{len(candidates)} row(s); cities covered: "
+                         + ", ".join(f"`{c}`" for c in cities) + "\n\n")
+                fh.write("| Dropped city | Rows | Properties |\n|---|----:|---|\n")
+                lab = dropped["City"].astype(str).str.strip().replace("", "(no city)")
+                for city, grp in sorted(dropped.groupby(lab),
+                                        key=lambda kv: -len(kv[1])):
+                    props = sorted(set(grp["Property"].astype(str).str.strip()))
+                    shown = ", ".join(f"`{p}`" for p in props[:6])
+                    if len(props) > 6:
+                        shown += f" …+{len(props) - 6}"
+                    fh.write(f"| {city} | {len(grp)} | {shown} |\n")
+        except OSError:
+            pass
+    return candidates.loc[keep].reset_index(drop=True)
+
+
 def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
     print(f"Adapter produced {len(df_co)} check-out rows, {len(df_ci)} check-in rows.")
 
     candidates = process_reservations(df_co, df_ci, city_seed=listing_city_seed(cfg))
     print(f"Processing produced {len(candidates)} schedule rows.")
+    # Resolve City to its best-known value BEFORE filtering, using the same
+    # Guesty-then-CSV priority the merge applies. Filtering on the raw value would
+    # drop any listing Guesty has no address for, even one the CSV can place.
+    if "City" in candidates.columns:
+        from sheet_merge import build_city_resolver
+        resolve = build_city_resolver(pd.DataFrame())
+        candidates["City"] = [str(c).strip() or resolve(p) for c, p
+                              in zip(candidates["City"], candidates["Property"])]
+    candidates = filter_to_cities(candidates, cfg.get("cities") or DEFAULT_CITIES)
+    if candidates.empty:
+        print("!! Nothing left after the city filter -- check SYNC_CITIES. "
+              "Refusing to treat this as a month of cancellations.")
+        return 1
     candidates = candidates.copy()
     candidates["_ym"] = candidates["Date"].astype(str).str.strip().str[:7]  # 'YYYY-MM'
 
@@ -327,7 +409,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
               "will have its data rows CLEARED and the month rebuilt from Guesty.")
 
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
-             "cancelled": 0, "moved": 0, "missing_city": 0}
+             "cancelled": 0, "moved": 0, "out_of_scope": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
     created = []      # titles of tabs auto-created this run
     repaired = []     # titles of shifted-layout tabs rebuilt from scratch
@@ -372,6 +454,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 cancel_window=tab_cancel_window(cancel_window, ym),
                 struck_rows=prior_struck,
                 validated_checkboxes=cb_cols or None,
+                allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
@@ -395,7 +478,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             # No prior rows left, so nothing can be cancelled on this pass.
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df, cancel_window=None, struck_rows=frozenset(),
-                validated_checkboxes=cb_cols or None)
+                validated_checkboxes=cb_cols or None,
+                allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES))
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),
@@ -580,6 +664,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     print(f"  Removed rows    : {stats['removed']}")
     print(f"  Cancelled rows  : {stats.get('cancelled', 0)}  (struck through, kept in place)")
     print(f"  Moved rows      : {stats.get('moved', 0)}  (reassigned in Guesty; old slot struck)")
+    print(f"  Out of scope    : {stats.get('out_of_scope', 0)}  (city this sheet does not cover; left alone)")
     print(f"  Unchanged       : {stats['unchanged']}")
     print(f"  Total in sheet  : {stats['total_rows']}")
     print(f"  Missing City    : {stats['missing_city']}")
@@ -592,6 +677,9 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
           + _fmt_rows(changes.get("cancelled", []), rcols))
     print("\n  --- Moved (same booking, new listing/date -> old slot struck) ---\n"
           + _fmt_rows(changes.get("moved", []), mcols))
+    if changes.get("out_of_scope"):
+        print("\n  --- Out of scope (city not covered; NOT struck, delete by hand) ---\n"
+              + _fmt_rows(changes["out_of_scope"], rcols + ["City"]))
     if stats.get("cancel_guard_tripped"):
         print("\n  !! CANCELLATION GUARD: " + stats["cancel_guard_tripped"])
     if changes["missing_city_properties"]:
@@ -618,6 +706,10 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
                          + _md_table(changes.get("cancelled", []), rcols))
                 fh.write("\n### Moved (reassigned in Guesty; old slot struck)\n"
                          + _md_table(changes.get("moved", []), mcols))
+                if changes.get("out_of_scope"):
+                    fh.write("\n### Out of scope — city not covered "
+                             "(left alone; delete by hand)\n"
+                             + _md_table(changes["out_of_scope"], rcols + ["City"]))
                 if stats.get("cancel_guard_tripped"):
                     fh.write("\n> ⚠️ **Cancellation guard tripped:** "
                              + stats["cancel_guard_tripped"] + "\n")

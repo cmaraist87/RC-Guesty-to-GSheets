@@ -85,8 +85,8 @@ def test_adapter_then_processing_then_merge():
     full, stats, changes = merge_reservations_into_sheet(out, existing)
     print("merge stats:", stats)
     assert set(changes.keys()) == {"new", "updated", "removed", "cancelled", "moved",
-                                   "missing_city_properties", "row_flags",
-                                   "kept_positions"}
+                                   "out_of_scope", "missing_city_properties",
+                                   "row_flags", "kept_positions"}
     assert len(changes["new"]) == stats["new"]
     assert all({"Date", "Property", "Guest", "Confirmation Code", "T/O"} <= set(r)
                for r in changes["new"])
@@ -297,6 +297,62 @@ def test_moves_alone_never_trip_the_guard():
     print("OK: 30 moves and zero cancellations leave the guard untripped")
 
 
+def test_city_filter_keeps_only_covered_markets():
+    """Guesty carries listings this team does not service. Those rows are not a data
+    gap to be filled -- they must never reach a tab."""
+    import sync
+
+    cands = pd.DataFrame([
+        dict(CANDIDATE, Property="1022 Mandeville", City="New Orleans"),
+        dict(CANDIDATE, Property="6 Lake", City="Savannah"),
+        dict(CANDIDATE, Property="315 Main 1 A", City="bay saint louis"),  # spelling drift
+        dict(CANDIDATE, Property="8249 E Chaparral", City="Scottsdale"),
+        dict(CANDIDATE, Property="2407 Hyde A", City="Boston"),
+        dict(CANDIDATE, Property="Website TEST", City=""),               # unknown scope
+    ])
+    kept = sync.filter_to_cities(cands, sync.DEFAULT_CITIES)
+
+    assert list(kept["Property"]) == ["1022 Mandeville", "6 Lake", "315 Main 1 A"], \
+        list(kept["Property"])
+    # "bay saint louis" must match "Bay St. Louis" -- a near-miss would silently drop
+    # a whole market.
+    assert kept.iloc[2]["City"] == "bay saint louis"
+    # A blank city is dropped, not assumed in scope.
+    assert "Website TEST" not in set(kept["Property"])
+    print("OK: city filter keeps the 5 covered markets, drops the rest and blanks")
+
+
+def test_out_of_scope_rows_are_not_struck_as_cancelled():
+    """An existing row for a dropped market produces no candidate by definition.
+    Striking it would call an out-of-scope property a CANCELLED booking, and enough
+    of them would trip the short-fetch guard and suppress the real cancellations."""
+    existing = pd.DataFrame([
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMLIVE0001",
+                "Property": "1022 Mandeville", "City": "New Orleans"}),
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMGONE0001",
+                "Property": "6 Lake", "City": "Savannah"}),
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMAZ00001",
+                "Property": "8249 E Chaparral", "City": "Scottsdale"}),
+    ], columns=LIVE_HEADER).astype(str)
+
+    _, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing,
+        cancel_window=("2026-10-01", "2026-12-31"),
+        allowed_cities=frozenset(["New Orleans", "Savannah", "Austin"]))
+
+    # Only the Savannah row is a real cancellation.
+    assert stats["cancelled"] == 1, stats
+    assert [r["Confirmation Code"] for r in changes["cancelled"]] == ["HMGONE0001"]
+    # The Scottsdale row is reported, not struck.
+    assert stats["out_of_scope"] == 1, stats
+    assert changes["out_of_scope"][0]["City"] == "Scottsdale", changes["out_of_scope"]
+    # ...and it carries no mark at all: find where sheet row 2 landed in the output.
+    at = changes["kept_positions"].index(2)
+    assert changes["row_flags"][at] == "", changes["row_flags"]
+    assert changes["row_flags"].count("cancelled") == 1, changes["row_flags"]
+    print("OK: out-of-scope rows reported, never struck as cancellations")
+
+
 def test_upstream_city_survives_the_merge():
     """Guesty's listing.address.city is authoritative and covers properties no CSV
     knows about. The merge used to overwrite City from property_to_city.csv, which
@@ -428,6 +484,8 @@ if __name__ == "__main__":
     test_reassignment_is_reported_as_moved_not_cancelled()
     test_cancel_guard_counts_cancellations_but_not_moves()
     test_moves_alone_never_trip_the_guard()
+    test_city_filter_keeps_only_covered_markets()
+    test_out_of_scope_rows_are_not_struck_as_cancelled()
     test_upstream_city_survives_the_merge()
     test_duplicate_rows_do_not_lose_a_tick()
     test_validated_checkbox_columns_beat_the_header_guess()
