@@ -353,6 +353,38 @@ def test_out_of_scope_rows_are_not_struck_as_cancelled():
     print("OK: out-of-scope rows reported, never struck as cancellations")
 
 
+def test_blank_city_is_unknown_not_out_of_scope():
+    """A blank City means 'unknown', never 'foreign'. Reading it as out of scope
+    excused real New Orleans rows from cancellation detection entirely -- 1405
+    Carondelet and 1401 Delano turned up in the out-of-scope list on a live run."""
+    existing = pd.DataFrame([
+        # Blank City, but property_to_city.csv places it in New Orleans.
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMGONE0001",
+                "Property": "1022 Mandeville", "City": ""}),
+        # Blank City and unknown to the CSV -> treated as in scope, not silently skipped.
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMUNKNOWN1",
+                "Property": "Somewhere Unmapped", "City": ""}),
+        # Blank City, but the CSV knows it is out of scope.
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMAZ00001",
+                "Property": "2407 Hyde A", "City": ""}),
+    ], columns=LIVE_HEADER).astype(str)
+
+    # 2407 Hyde A resolves to a city outside the allowlist via the seeded CSV row.
+    _, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([dict(CANDIDATE, Property="6 Lake", City="Savannah")]), existing,
+        cancel_window=("2026-10-01", "2026-12-31"),
+        allowed_cities=frozenset(["New Orleans", "Savannah", "Austin"]))
+
+    struck = {r["Confirmation Code"] for r in changes["cancelled"]}
+    # The New Orleans row is judged normally -> struck, not excused.
+    assert "HMGONE0001" in struck, changes["cancelled"]
+    # The unplaceable row is also judged normally rather than silently skipped.
+    assert "HMUNKNOWN1" in struck, changes["cancelled"]
+    assert stats["out_of_scope"] == 0 or all(
+        r["Confirmation Code"] != "HMGONE0001" for r in changes["out_of_scope"])
+    print("OK: blank City resolves before scope is judged; unknown != out of scope")
+
+
 def test_upstream_city_survives_the_merge():
     """Guesty's listing.address.city is authoritative and covers properties no CSV
     knows about. The merge used to overwrite City from property_to_city.csv, which
@@ -486,6 +518,7 @@ if __name__ == "__main__":
     test_moves_alone_never_trip_the_guard()
     test_city_filter_keeps_only_covered_markets()
     test_out_of_scope_rows_are_not_struck_as_cancelled()
+    test_blank_city_is_unknown_not_out_of_scope()
     test_upstream_city_survives_the_merge()
     test_duplicate_rows_do_not_lose_a_tick()
     test_validated_checkbox_columns_beat_the_header_guess()

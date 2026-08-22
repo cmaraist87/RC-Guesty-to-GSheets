@@ -358,6 +358,7 @@ def merge_reservations_into_sheet(
     cancelled_pos: set[int] = set()
     moved_pos: set[int] = set()
     out_of_scope_pos: set[int] = set()
+    out_of_scope_city: dict[int, str] = {}   # the city that put each row out of scope
     guard_tripped = ""
     allowed = frozenset(norm_city(c) for c in (allowed_cities or ()))
     has_city = "City" in sheet.columns
@@ -375,8 +376,18 @@ def merge_reservations_into_sheet(
             # CANCELLED booking, which is simply untrue -- and 70-odd such rows would
             # trip the short-fetch guard and suppress the real cancellations too.
             # Report them separately so they can be deleted deliberately.
-            if allowed and has_city and norm_city(r["City"]) not in allowed:
+            #
+            # A BLANK City means "unknown", never "out of scope": plenty of older
+            # rows predate the City column being filled, and treating them as foreign
+            # quietly excused real New Orleans rows from cancellation detection. Fall
+            # back to the resolver, and if the city still cannot be established treat
+            # the row as in scope so it goes through the normal checks.
+            row_city = str(r["City"]).strip() if has_city else ""
+            if not row_city:
+                row_city = resolve_city(prop)
+            if allowed and row_city and norm_city(row_city) not in allowed:
                 out_of_scope_pos.add(i)
+                out_of_scope_city[i] = row_city
                 continue
             in_window += 1
             if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
@@ -487,7 +498,9 @@ def merge_reservations_into_sheet(
     out_of_scope_records = []
     for i in sorted(out_of_scope_pos):
         rec = _struck_rec(i)
-        rec["City"] = str(sheet.at[i, "City"]).strip() if has_city else ""
+        # The resolved city, not the raw cell -- the cell is often blank, which is
+        # exactly why the row needed resolving in the first place.
+        rec["City"] = out_of_scope_city.get(i, "")
         out_of_scope_records.append(rec)
     moved_records = []
     for i in sorted(moved_pos):
