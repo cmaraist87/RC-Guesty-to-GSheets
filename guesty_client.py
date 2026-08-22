@@ -134,7 +134,49 @@ def fetch_reservations(
     return results
 
 
-def _get_with_retry(sess, url, headers, params, tries: int = 5) -> requests.Response:
+def fetch_listings(
+    token: str,
+    fields: str | None = None,
+    page_size: int = 100,
+    max_pages: int = 100,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """
+    Every listing on the account, for building a nickname -> city map.
+
+    Separate from the reservation fetch on purpose: asking /reservations to project
+    the nested listing address is what Guesty rejected, and a listing's city is a
+    property of the LISTING, not of each booking -- so fetching it once per run is
+    both cheaper and more honest than repeating it on 3000 reservations.
+    """
+    sess = session or requests.Session()
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    results: list[dict] = []
+    skip = 0
+    for _ in range(max_pages):
+        params = {"limit": page_size, "skip": skip}
+        if fields:
+            params["fields"] = fields
+        resp = _get_with_retry(sess, f"{BASE_URL}/listings", headers, params,
+                               what="Listings")
+        payload = resp.json()
+        page = payload.get("results")
+        if page is None:
+            page = (payload.get("data") or {}).get("results", []) \
+                if isinstance(payload.get("data"), dict) else []
+        results.extend(page)
+
+        total = payload.get("count")
+        skip += page_size
+        if not page or (total is not None and skip >= total):
+            break
+
+    return results
+
+
+def _get_with_retry(sess, url, headers, params, tries: int = 5,
+                    what: str = "Reservations") -> requests.Response:
     """
     Retry 429s and 5xx, fail fast on anything else.
 
@@ -165,11 +207,11 @@ def _get_with_retry(sess, url, headers, params, tries: int = 5) -> requests.Resp
             time.sleep(min(wait, 60))
             delay *= 2
             continue
-        raise GuestyError(_fail_msg("failed", url, params, seen))
-    raise GuestyError(_fail_msg(f"failed after {tries} attempts", url, params, seen))
+        raise GuestyError(_fail_msg(what, "failed", url, params, seen))
+    raise GuestyError(_fail_msg(what, f"failed after {tries} attempts", url, params, seen))
 
 
-def _fail_msg(what: str, url: str, params: dict, seen: list) -> str:
+def _fail_msg(what: str, outcome: str, url: str, params: dict, seen: list) -> str:
     attempts = "; ".join(f"[{i + 1}] {s}: {b or '(empty body)'}"
                          for i, (s, b) in enumerate(seen)) or "(no response at all)"
     fields = params.get("fields") or "(none)"

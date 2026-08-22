@@ -68,6 +68,11 @@ jobs:
           SYNC_LOOKAHEAD_DAYS: ${{ vars.SYNC_LOOKAHEAD_DAYS }}
           SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
           SYNC_MARK_CANCELLED: ${{ vars.SYNC_MARK_CANCELLED }}
+          # Diagnostic escape hatches. Both are unset in normal operation.
+          #   SYNC_FIELDS_MODE=paths   ask Guesty for dotted field paths
+          #   SYNC_LISTING_CITIES=1    resolve City from /listings instead of the CSV
+          SYNC_FIELDS_MODE: ${{ vars.SYNC_FIELDS_MODE }}
+          SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
           # Manual dispatch only. On a scheduled run this expands to "" and sync.py
           # treats a blank value as unset, so the daily job can never clear a tab.
           SYNC_REPAIR_SHIFTED_TABS: ${{ github.event.inputs.repair_shifted_tabs }}

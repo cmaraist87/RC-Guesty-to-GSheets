@@ -71,6 +71,16 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `SYNC_LOOKAHEAD_DAYS` | `180` | include check-ins up to N days ahead |
 | `SYNC_STATUSES` | `confirmed,reserved,checkedIn` | reservation statuses to include |
 | `SYNC_MARK_CANCELLED` | `1` | strike through rows whose reservation vanished from Guesty. Set `0` to leave them untouched. |
+| `SYNC_LISTING_CITIES` | *(off)* | Set `1` to resolve **City** from Guesty's listings (one extra call per run) instead of relying on `property_to_city.csv`. Fail-soft: if the call errors, the run continues on the CSV alone. |
+| `SYNC_FIELDS_MODE` | `objects` | Diagnostic. `paths` asks Guesty for dotted field paths (`listing.address.city`). The live API **rejected** this on 2026-08-21 and the run failed, so leave it unset unless you are testing. |
+
+### Where the City column comes from
+Priority, highest first: the reservation's own `LISTING'S CITY` → the Guesty listings
+lookup (`SYNC_LISTING_CITIES=1`) → `property_to_city.csv` at merge time. The CSV is
+meant to cover **exceptions**, not the whole portfolio; if it has grown to hundreds of
+rows, the lookup above it has stopped working. Each run logs a **City source** line
+saying how many reservations arrived with a city, and lists any listing that has no
+city set in Guesty — fix those in Guesty and every downstream system benefits.
 
 ### Daily visual diff — highlights and strikethrough
 Each run marks what it changed, so the ops team can see the day's delta at a glance:

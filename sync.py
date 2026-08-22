@@ -225,11 +225,67 @@ def _spanish_tab(ym: str) -> str:
     return f"{_SPANISH_MONTHS[m]} {y}"
 
 
+def listing_city_seed(cfg: dict) -> dict:
+    """
+    {property name -> city} built from Guesty's LISTINGS, not its reservations.
+
+    A listing's city belongs to the listing, so fetching it once per run beats
+    projecting it onto 3000 bookings -- and it sidesteps the nested-field request
+    that /reservations rejected. Whatever this returns seeds `process_reservations`;
+    property_to_city.csv still fills anything left blank at merge time, so the CSV
+    goes back to covering exceptions instead of the whole portfolio.
+
+    OFF by default (SYNC_LISTING_CITIES=1 to enable) and deliberately fail-soft:
+    the City column is a convenience, and no problem with it justifies failing a
+    sync that is otherwise fine. Any error is reported and returns {}.
+    """
+    # Unset repo variables arrive as "" from Actions, so blank means off.
+    flag = (os.environ.get("SYNC_LISTING_CITIES") or "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return {}
+    try:
+        from guesty_client import get_access_token, fetch_listings
+        from processing import normalize_property
+
+        token = get_access_token(cfg["client_id"], cfg["client_secret"])
+        # No `fields` param on purpose: asking Guesty to project a nested address
+        # is exactly what failed on /reservations. Full objects, ~a few hundred.
+        listings = fetch_listings(token)
+        print(f"\nFetched {len(listings)} listing(s) for the City lookup.")
+
+        seed, no_city = {}, []
+        for lst in listings:
+            name = str(lst.get("nickname") or lst.get("title") or "").strip()
+            city = str(((lst.get("address") or {}).get("city") or "")).strip()
+            if not name:
+                continue
+            if not city:
+                no_city.append(name)
+                continue
+            seed[name] = city
+            # A combo listing ("311 W York 1&2") is split by the pipeline, so seed
+            # each unit it becomes as well or the split rows resolve to nothing.
+            for prop in normalize_property(name):
+                seed.setdefault(prop, city)
+
+        print(f"  -> {len(seed)} property name(s) mapped to a city.")
+        if no_city:
+            print(f"  -> {len(no_city)} listing(s) have NO city in Guesty; "
+                  "these still need property_to_city.csv:")
+            for n in sorted(no_city)[:30]:
+                print(f"       {n}")
+        return seed
+    except Exception as e:  # noqa: BLE001 - never fail the sync over the City column
+        print(f"\n!! Could not build the City lookup from Guesty listings: {e}")
+        print("   Falling back to property_to_city.csv alone.")
+        return {}
+
+
 def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
     print(f"Adapter produced {len(df_co)} check-out rows, {len(df_ci)} check-in rows.")
 
-    candidates = process_reservations(df_co, df_ci)
+    candidates = process_reservations(df_co, df_ci, city_seed=listing_city_seed(cfg))
     print(f"Processing produced {len(candidates)} schedule rows.")
     candidates = candidates.copy()
     candidates["_ym"] = candidates["Date"].astype(str).str.strip().str[:7]  # 'YYYY-MM'
