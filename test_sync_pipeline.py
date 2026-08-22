@@ -297,6 +297,34 @@ def test_moves_alone_never_trip_the_guard():
     print("OK: 30 moves and zero cancellations leave the guard untripped")
 
 
+def test_upstream_city_survives_the_merge():
+    """Guesty's listing.address.city is authoritative and covers properties no CSV
+    knows about. The merge used to overwrite City from property_to_city.csv, which
+    threw that away and then reported the property as missing a city."""
+    # A property deliberately absent from property_to_city.csv.
+    cand = dict(CANDIDATE, Property="2407 Hyde A", City="Scottsdale")
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([cand]), pd.DataFrame(columns=LIVE_HEADER))
+
+    assert full.iloc[0]["City"] == "Scottsdale", full.iloc[0].to_dict()
+    assert stats["missing_city"] == 0, stats
+    assert changes["missing_city_properties"] == [], changes["missing_city_properties"]
+
+    # A blank City still falls back to the CSV, as before.
+    blank = dict(CANDIDATE, Property="1022 Mandeville", City="")
+    full2, _, _ = merge_reservations_into_sheet(
+        pd.DataFrame([blank]), pd.DataFrame(columns=LIVE_HEADER))
+    assert full2.iloc[0]["City"] == "New Orleans", full2.iloc[0].to_dict()
+
+    # ...and a property in NEITHER is still reported, so real gaps stay visible.
+    gap = dict(CANDIDATE, Property="9020 Blackjack 16", City="")
+    _, stats3, changes3 = merge_reservations_into_sheet(
+        pd.DataFrame([gap]), pd.DataFrame(columns=LIVE_HEADER))
+    assert stats3["missing_city"] == 1, stats3
+    assert changes3["missing_city_properties"] == ["9020 Blackjack 16"]
+    print("OK: upstream City wins, CSV fills blanks, real gaps still reported")
+
+
 def test_duplicate_rows_do_not_lose_a_tick():
     """One (Property, Date) slot can hold several rows -- Agosto 2026 had ~75 dupes.
     All of them are dropped for the single re-written row, so a tick set on ANY of
@@ -400,6 +428,7 @@ if __name__ == "__main__":
     test_reassignment_is_reported_as_moved_not_cancelled()
     test_cancel_guard_counts_cancellations_but_not_moves()
     test_moves_alone_never_trip_the_guard()
+    test_upstream_city_survives_the_merge()
     test_duplicate_rows_do_not_lose_a_tick()
     test_validated_checkbox_columns_beat_the_header_guess()
     test_shifted_layout_raises_a_typed_error()

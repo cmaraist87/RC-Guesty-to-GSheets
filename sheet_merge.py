@@ -247,9 +247,15 @@ def merge_reservations_into_sheet(
     sheet = sheet.reset_index(drop=True)  # positions must be 0..n-1 for row maths
     _reject_shifted_layout(sheet)
 
-    # Fill City
+    # Fill City -- FILL, not overwrite. The pipeline may already have resolved it
+    # upstream (Guesty's listing.address.city, which is authoritative and covers
+    # properties no CSV knows about); replacing that with a CSV lookup threw the
+    # good value away and reported the property as missing a city.
     resolve_city = build_city_resolver(sheet, city_ref_csv)
-    candidates["City"] = [resolve_city(p) for p in candidates["Property"]]
+    have = (candidates["City"].astype(str) if "City" in candidates.columns
+            else pd.Series([""] * len(candidates), index=candidates.index))
+    candidates["City"] = [c.strip() or resolve_city(p)
+                          for c, p in zip(have, candidates["Property"])]
 
     # Match the sheet's Date display format (append ' 00:00:00' if the sheet uses it)
     if len(sheet) and sheet["Date"].astype(str).str.contains(r"\d\d:\d\d").any():
