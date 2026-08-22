@@ -203,7 +203,18 @@ def requested_fields() -> str:
     paths = set()
     for candidates in FIELD_MAP.values():
         for p in candidates:
-            paths.add(p if mode == "paths" else p.split(".")[0])
+            root = p.split(".")[0]
+            if mode != "paths":
+                paths.add(root)
+            elif root.endswith("Id"):
+                # Guesty puts the raw *Id scalars into the projection itself (it
+                # needs listingId to populate `listing`), so asking for a sub-path
+                # of one is rejected outright: "500: Path collision at listingId".
+                # Request the bare id; the populated `listing`/`guest` objects below
+                # are where the useful fields actually live anyway.
+                paths.add(root)
+            else:
+                paths.add(p)
     # Always include status/dates used for filtering/sorting.
     paths.update({"status", "checkIn", "checkOut", "confirmationCode"})
     return " ".join(sorted(paths))
