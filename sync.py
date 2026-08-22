@@ -147,7 +147,54 @@ def fetch_from_guesty(cfg: dict) -> list[dict]:
     print(f"Fetching reservations with filters: {json.dumps(filters)}")
     reservations = fetch_reservations(token, filters=filters, fields=requested_fields())
     print(f"Fetched {len(reservations)} reservations.")
+    report_city_coverage(reservations)
     return reservations
+
+
+def report_city_coverage(reservations: list[dict]) -> None:
+    """
+    How many reservations arrived with a city on their listing?
+
+    `listing.address.city` outranks property_to_city.csv (see process_reservations),
+    so if Guesty supplies it the CSV only ever needs to cover the gaps. Hundreds of
+    rows with no City therefore means one of two very different things, and guessing
+    which has been the blocker: either those listings have no address in Guesty, or
+    the `fields` request isn't bringing the nested address back at all. This says
+    which, in one line, without dumping any guest data.
+    """
+    if not reservations:
+        return
+    with_city = sum(1 for r in reservations if str(_first_city(r)).strip())
+    n = len(reservations)
+    print(f"\n--- City source check ---")
+    print(f"  {with_city}/{n} reservation(s) carried a city from Guesty "
+          f"({with_city / n:.0%}).")
+    if not with_city:
+        # Nothing came back at all -> almost certainly the request, not the data.
+        listing = reservations[0].get("listing") or reservations[0].get("listingId")
+        shape = (sorted(listing.keys()) if isinstance(listing, dict)
+                 else f"{type(listing).__name__}: {str(listing)[:60]}")
+        print("  NONE. The listing object we received looks like:")
+        print(f"    {shape}")
+        print("  If 'address' is absent, the `fields` param is trimming it -- ask for "
+              "the dotted paths (listing.address.city) rather than the bare object.")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n**City source:** {with_city}/{n} reservation(s) "
+                         f"({with_city / n:.0%}) carried a city from Guesty; the rest "
+                         "fall back to `property_to_city.csv`.\n")
+        except OSError:
+            pass
+
+
+def _first_city(res: dict):
+    for path in FIELD_MAP["city"]:
+        v = _dig(res, path)
+        if v:
+            return v
+    return ""
 
 
 def describe_first(reservations: list[dict]) -> None:
