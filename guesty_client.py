@@ -67,6 +67,18 @@ def get_access_token(
                  "Accept": "application/json"},
         timeout=30,
     )
+    if resp.status_code == 429:
+        # Not a credentials problem, and retrying will not help: the quota is ~5
+        # token requests per key per 24h. Say so, because the generic "check your
+        # credentials" message sends people to look in exactly the wrong place.
+        raise GuestyError(
+            "Token request rate-limited (429). Guesty allows only ~5 access-token "
+            "requests per API key per 24h and this one is exhausted -- the "
+            "credentials are fine. Each CI run burns one unless the token cache is "
+            "restored, so several manual runs in a day will do it. Wait for the "
+            "quota to roll over (up to 24h), then re-run. "
+            f"Body: {resp.text[:200]}"
+        )
     if resp.status_code != 200:
         raise GuestyError(
             f"Token request failed ({resp.status_code}). "

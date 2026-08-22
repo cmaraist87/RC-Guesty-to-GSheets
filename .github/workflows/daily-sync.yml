@@ -55,6 +55,20 @@ jobs:
             fi
           fi
 
+      # Guesty allows only ~5 access-token requests per API key per 24h. A runner is
+      # ephemeral, so without this every run burns one and a handful of manual runs
+      # in a day exhausts the quota -- taking the scheduled run down with it. The
+      # token file carries its own expiry and is refreshed when close to it.
+      # NOTE: this stores a bearer token in the repo's Actions cache, which anyone
+      # with repo access can read. Delete the cache if the key is ever rotated.
+      - name: Restore cached Guesty token
+        if: steps.guard.outputs.run == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: .guesty_token.json
+          key: guesty-token-${{ github.run_id }}
+          restore-keys: guesty-token-
+
       - name: Run sync
         if: steps.guard.outputs.run == 'yes'
         env:
