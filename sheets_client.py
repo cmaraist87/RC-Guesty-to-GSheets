@@ -339,9 +339,47 @@ def apply_row_marks(ws, row_flags: list[str], was_highlighted: set,
             "unhighlighted": len(highlight_off)}
 
 
+def ensure_grid(ws, n_rows: int, n_cols: int, checkbox_cols=()) -> int:
+    """
+    Grow the tab so an `n_rows` x `n_cols` block fits, and carry the checkbox
+    data-validation into the rows that were just created. Returns rows added.
+
+    Sheets does NOT auto-expand for a values write: a block taller than the grid is
+    rejected outright ("exceeds grid limits"), so a month that outgrows its tab would
+    fail the whole write rather than truncate. Rebuilding Septiembre needed 1466 rows
+    in a 1318-row tab.
+
+    Rows added this way start with no data validation, so a checkbox column would
+    render the literal text FALSE. `checkbox_cols` (0-based indices, from
+    read_checkbox_columns) get the BOOLEAN rule extended over the new range.
+    """
+    have_rows = int(getattr(ws, "row_count", 0) or 0)
+    have_cols = int(getattr(ws, "col_count", 0) or 0)
+
+    if n_cols > have_cols and hasattr(ws, "add_cols"):
+        ws.add_cols(n_cols - have_cols)
+    if n_rows <= have_rows or not hasattr(ws, "add_rows"):
+        return 0
+
+    added = n_rows - have_rows
+    ws.add_rows(added)
+    requests = [
+        {"setDataValidation": {
+            "range": {"sheetId": ws.id,
+                      "startRowIndex": have_rows, "endRowIndex": n_rows,
+                      "startColumnIndex": a, "endColumnIndex": b + 1},
+            "rule": {"condition": {"type": "BOOLEAN"},
+                     "strict": True, "showCustomUi": True}}}
+        for a, b in _runs(sorted(checkbox_cols))
+    ]
+    _apply_requests(ws, requests)
+    return added
+
+
 def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
                     row_flags: list[str] | None = None,
-                    was_highlighted: set | None = None) -> dict:
+                    was_highlighted: set | None = None,
+                    checkbox_cols=()) -> dict:
     """
     Write `full` starting at A1, keeping the sheet's ORIGINAL header row intact and
     value-clearing any rows below the new data (checkbox formatting preserved).
@@ -355,6 +393,8 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
     new_row_count = len(matrix)
     n_cols = max(len(header_raw), full.shape[1])
 
+    grew = ensure_grid(ws, new_row_count, n_cols, checkbox_cols)
+
     ws.update(
         range_name="A1",
         values=matrix,
@@ -366,9 +406,11 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
         ws.batch_clear([f"A{new_row_count + 1}:{_col_letter(n_cols)}{prev_row_count}"])
 
     if row_flags is None:
-        return {}
-    return apply_row_marks(ws, row_flags, was_highlighted or set(), n_cols,
-                           clear_from=max(prev_row_count - 1, len(row_flags)))
+        return {"rows_added": grew}
+    marks = apply_row_marks(ws, row_flags, was_highlighted or set(), n_cols,
+                            clear_from=max(prev_row_count - 1, len(row_flags)))
+    marks["rows_added"] = grew
+    return marks
 
 
 def _col_letter(n: int) -> str:

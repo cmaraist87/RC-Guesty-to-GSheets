@@ -248,6 +248,76 @@ def test_repaired_tab_is_not_reported_as_skipped():
     print("OK: a repaired tab raises no skipped-tab warning")
 
 
+def test_grid_grows_to_fit_and_new_rows_get_checkboxes():
+    """Sheets rejects a values write taller than the grid ("exceeds grid limits"),
+    so a month that outgrows its tab would fail outright -- Septiembre needed 1466
+    rows in a 1318-row tab. Grow first, and carry the checkbox rule onto the rows
+    that were added, or those cells render the literal text FALSE."""
+    import pandas as pd
+    import sheets_client as sc
+
+    class GrowWS(FakeWS):
+        def __init__(self, title, values, row_count):
+            super().__init__(title, values)
+            self.row_count = row_count
+            self.col_count = len(HEADER)
+            self.added = 0
+
+        def add_rows(self, n):
+            self.added += n
+            self.row_count += n
+
+    ws = GrowWS("Agosto 2026", [HEADER], row_count=10)
+    ss = RecordingSS(); ws.spreadsheet = ss
+    # 25 data rows + header = 26 > the 10-row grid.
+    full = pd.DataFrame([dict(zip(HEADER, ["New Orleans", "Monday", "2026-08-03",
+                                           f"HM{i:08d}", "G", "FALSE", "1022 Erato",
+                                           "FALSE", "11:00 AM", "FALSE", "", "FALSE",
+                                           "", "", "", ""])) for i in range(25)],
+                        columns=HEADER)
+    marks = sc.write_dataframe(ws, full, HEADER, row_flags=["new"] * 25,
+                               was_highlighted=set(), checkbox_cols={5, 7, 9, 11})
+
+    assert ws.added == 16, ws.added            # 10 -> 26
+    assert marks["rows_added"] == 16, marks
+    assert len(ws.updated) == 26, len(ws.updated)
+
+    dv = [r["setDataValidation"] for r in ss.requests if "setDataValidation" in r]
+    assert dv, "the new rows must get the checkbox rule"
+    for r in dv:
+        assert r["rule"]["condition"]["type"] == "BOOLEAN", r
+        # Only the rows that did not exist before, never the existing ones.
+        assert r["range"]["startRowIndex"] == 10, r
+        assert r["range"]["endRowIndex"] == 26, r
+    covered = {c for r in dv
+               for c in range(r["range"]["startColumnIndex"], r["range"]["endColumnIndex"])}
+    assert covered == {5, 7, 9, 11}, covered
+    print("OK: grid grown to fit, checkbox validation extended over the new rows")
+
+
+def test_grid_untouched_when_it_already_fits():
+    import pandas as pd
+    import sheets_client as sc
+
+    class GrowWS(FakeWS):
+        def __init__(self):
+            super().__init__("Agosto 2026", [HEADER])
+            self.row_count, self.col_count, self.added = 1000, len(HEADER), 0
+
+        def add_rows(self, n):
+            self.added += n
+
+    ws = GrowWS(); ws.spreadsheet = RecordingSS()
+    full = pd.DataFrame([dict(zip(HEADER, ["New Orleans", "Monday", "2026-08-03",
+                                           "HM1", "G", "FALSE", "1022 Erato", "FALSE",
+                                           "11:00 AM", "FALSE", "", "FALSE",
+                                           "", "", "", ""]))], columns=HEADER)
+    marks = sc.write_dataframe(ws, full, HEADER, row_flags=["new"],
+                               was_highlighted=set(), checkbox_cols={5, 7, 9, 11})
+    assert ws.added == 0 and marks["rows_added"] == 0, (ws.added, marks)
+    print("OK: a tab with room to spare is not resized")
+
+
 class RecordingSS:
     """Minimal spreadsheet stand-in that captures batch_update payloads."""
 
@@ -319,6 +389,8 @@ if __name__ == "__main__":
     test_shifted_tab_is_skipped_without_the_flag()
     test_shifted_tab_dry_run_does_not_clear()
     test_shifted_tab_repair_clears_and_rebuilds()
+    test_grid_grows_to_fit_and_new_rows_get_checkboxes()
+    test_grid_untouched_when_it_already_fits()
     test_skipped_tab_is_reported_in_the_step_summary()
     test_repaired_tab_is_not_reported_as_skipped()
 

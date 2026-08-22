@@ -363,7 +363,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         prior_struck, prior_highlight = read_row_marks(ws)
         # Which columns really are checkboxes, per the tab's own data-validation.
         # Empty (unreadable tab, or none defined) -> merge falls back to guessing.
-        cb_cols = frozenset(sheet_df.columns[j] for j in read_checkbox_columns(ws)
+        cb_idx = read_checkbox_columns(ws)
+        cb_cols = frozenset(sheet_df.columns[j] for j in cb_idx
                             if j < len(sheet_df.columns))
         try:
             full, stats, changes = merge_reservations_into_sheet(
@@ -413,13 +414,17 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                                if pos in prior_highlight}
             marks = write_dataframe(ws, full, header_raw,
                                     row_flags=changes["row_flags"],
-                                    was_highlighted=was_highlighted)
+                                    was_highlighted=was_highlighted,
+                                    checkbox_cols=cb_idx)
             n_written += 1
             print(f"   -> wrote {len(full)} rows to tab '{ws.title}'"
                   + (f" (highlighted {marks.get('highlighted', 0)}, "
                      f"struck {marks.get('struck', 0)}, "
                      f"cleared {marks.get('unhighlighted', 0)} old highlight(s))."
                      if marks else "."))
+            if marks.get("rows_added"):
+                print(f"      grew the tab by {marks['rows_added']} row(s) to fit, "
+                      "with checkbox validation extended over them.")
 
     if snapshots:
         pd.concat(snapshots, ignore_index=True).to_csv(OUTPUT_CSV, index=False)
