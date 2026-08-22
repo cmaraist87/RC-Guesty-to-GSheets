@@ -18,6 +18,7 @@ the live API to print a real reservation's keys, then confirm/adjust these paths
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -179,10 +180,24 @@ def reservations_to_frames(reservations: list[dict]) -> tuple[pd.DataFrame, pd.D
 # Minimal set of fields to request from the API (keeps payloads small/fast).
 # Passed to GET /reservations as the `fields` query param (space-separated).
 def requested_fields() -> str:
+    """
+    Ask for the FULL dotted paths, not the objects that contain them.
+
+    Requesting the bare `listing` object looked equivalent -- dig into it locally --
+    but Guesty returns a TRIMMED listing for that projection, and `address` is not
+    in the trim. That silently cost every row its City: a live run measured 0 of
+    3287 reservations arriving with one, which is why property_to_city.csv had
+    grown to carry the whole portfolio instead of just the exceptions.
+
+    Set SYNC_FIELDS_MODE=objects to restore the old top-level request if a future
+    API change makes the dotted projection unhappy; the "City source check" line
+    in the run log says which one is actually working.
+    """
+    mode = os.environ.get("SYNC_FIELDS_MODE", "").strip().lower() or "paths"
     paths = set()
     for candidates in FIELD_MAP.values():
         for p in candidates:
-            paths.add(p.split(".")[0])  # request the top-level object; we dig locally
+            paths.add(p if mode == "paths" else p.split(".")[0])
     # Always include status/dates used for filtering/sorting.
     paths.update({"status", "checkIn", "checkOut", "confirmationCode"})
     return " ".join(sorted(paths))

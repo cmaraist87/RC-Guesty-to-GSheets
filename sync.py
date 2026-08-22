@@ -37,6 +37,8 @@ Config (environment variables):
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import os
 import sys
@@ -466,10 +468,12 @@ def _write_grand_summary(grand: dict, skipped: list, created: list, repaired: li
                 fh.write(f"\n<details><summary><b>{len(props)} propertie(s) with no "
                          "City</b> — click to expand, then fill in the city and paste "
                          "into <code>property_to_city.csv</code></summary>\n\n")
-                fh.write("```csv\n")
-                for p in props:
-                    fh.write(f"{p},\n")
-                fh.write("```\n\n</details>\n")
+                # csv.writer, not an f-string: property names like
+                # "56 Turner 2,3,4&5" contain commas and MUST come out quoted, or
+                # the pasted row silently parses as four columns and never matches.
+                buf = io.StringIO()
+                csv.writer(buf, lineterminator="\n").writerows([[p, ""] for p in props])
+                fh.write("```csv\n" + buf.getvalue() + "```\n\n</details>\n")
     except OSError:
         pass
 
