@@ -135,21 +135,45 @@ def fetch_reservations(
 
 
 def _get_with_retry(sess, url, headers, params, tries: int = 5) -> requests.Response:
+    """
+    Retry 429s and 5xx, fail fast on anything else.
+
+    The failure message deliberately carries the status of EVERY attempt and the
+    `fields` projection that was sent. A run once died with "failed after 5 retries
+    (?):" -- no status, no body, nothing to act on -- and the projection is exactly
+    what tends to be at fault, so it belongs in the message. Neither the token nor
+    any guest data is included; `fields` is a list of field names.
+    """
     delay = 2.0
     last = None
+    seen = []      # (status, body-snippet) per attempt, oldest first
     for attempt in range(tries):
-        resp = sess.get(url, headers=headers, params=params, timeout=60)
+        try:
+            resp = sess.get(url, headers=headers, params=params, timeout=60)
+        except requests.RequestException as e:  # DNS/TLS/timeout: retryable
+            seen.append((type(e).__name__, str(e)[:120]))
+            time.sleep(min(delay, 60))
+            delay *= 2
+            continue
         if resp.status_code == 200:
             return resp
         last = resp
+        seen.append((resp.status_code, (resp.text or "").strip()[:200]))
         if resp.status_code == 429 or resp.status_code >= 500:
             # honour Retry-After when present, else exponential backoff
             wait = float(resp.headers.get("Retry-After", delay))
             time.sleep(min(wait, 60))
             delay *= 2
             continue
-        raise GuestyError(f"Reservations GET failed ({resp.status_code}): {resp.text[:300]}")
-    raise GuestyError(
-        f"Reservations GET failed after {tries} retries "
-        f"({last.status_code if last else '?'}): {last.text[:300] if last else ''}"
-    )
+        raise GuestyError(_fail_msg("failed", url, params, seen))
+    raise GuestyError(_fail_msg(f"failed after {tries} attempts", url, params, seen))
+
+
+def _fail_msg(what: str, url: str, params: dict, seen: list) -> str:
+    attempts = "; ".join(f"[{i + 1}] {s}: {b or '(empty body)'}"
+                         for i, (s, b) in enumerate(seen)) or "(no response at all)"
+    fields = params.get("fields") or "(none)"
+    return (f"Reservations GET {what}.\n"
+            f"  url     : {url}\n"
+            f"  attempts: {attempts}\n"
+            f"  fields  : {fields}")

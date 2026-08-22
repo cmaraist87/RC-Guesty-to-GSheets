@@ -189,11 +189,17 @@ def requested_fields() -> str:
     3287 reservations arriving with one, which is why property_to_city.csv had
     grown to carry the whole portfolio instead of just the exceptions.
 
-    Set SYNC_FIELDS_MODE=objects to restore the old top-level request if a future
-    API change makes the dotted projection unhappy; the "City source check" line
-    in the run log says which one is actually working.
+    DEFAULT IS `objects` because the dotted projection was tried against the live
+    API on 2026-08-21 and the request failed outright (repeated non-200s, so every
+    page retried and the run died). Guesty does not accept this `fields` form on
+    this account. Losing the City is bad; failing the whole sync every morning is
+    worse, so the known-good request is the default until the City gap is solved a
+    different way -- most likely by reading listings from /listings separately.
+
+    Set SYNC_FIELDS_MODE=paths to retry the dotted projection; the "City source
+    check" line in the run log says whether it actually worked.
     """
-    mode = os.environ.get("SYNC_FIELDS_MODE", "").strip().lower() or "paths"
+    mode = os.environ.get("SYNC_FIELDS_MODE", "").strip().lower() or "objects"
     paths = set()
     for candidates in FIELD_MAP.values():
         for p in candidates:
