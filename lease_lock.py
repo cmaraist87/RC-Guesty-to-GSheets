@@ -26,6 +26,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import random
 import threading
 import time
 import uuid
@@ -108,28 +109,72 @@ class GCSObjectStore:
         from urllib.parse import quote
         return quote(name, safe="")
 
-    def read(self, name: str) -> tuple[bytes | None, int]:
-        resp = self.session.get(
-            self._READ.format(bucket=self.bucket, name=self._quote(name)), timeout=30)
-        if resp.status_code == 404:
-            return None, 0
-        if resp.status_code != 200:
+    # Cloud Storage rate-limits MUTATIONS PER OBJECT (roughly one write a second),
+    # separately from any project-wide quota. A lock is by definition one object
+    # that contended callers all write at once, so a burst of acquirers earns a 429
+    # -- observed with eight racers against a real bucket, where three died. The
+    # in-memory store has no such limit, which is why no offline test could find it.
+    #
+    # Retrying a CONDITIONAL write is safe: ifGenerationMatch makes it idempotent,
+    # so a retry of a write that actually succeeded comes back 412, which is the
+    # correct answer anyway. Jitter breaks up the synchronised herd that caused it.
+    _RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+    def _sleep_before_retry(self, resp, delay: float) -> float:
+        wait = delay
+        try:
+            wait = float(resp.headers.get("Retry-After", delay))
+        except (TypeError, ValueError):
+            pass
+        time.sleep(min(wait, 30.0) + random.uniform(0, 0.25))
+        return min(delay * 2, 16.0)
+
+    def read(self, name: str, tries: int = 5) -> tuple[bytes | None, int]:
+        delay, last = 0.5, None
+        for _ in range(tries):
+            resp = self.session.get(
+                self._READ.format(bucket=self.bucket, name=self._quote(name)),
+                timeout=30)
+            if resp.status_code == 404:
+                return None, 0
+            if resp.status_code == 200:
+                # Generation of the bytes just read; the conditional write needs it.
+                return resp.content, int(resp.headers.get("x-goog-generation", 0))
+            if resp.status_code in self._RETRY_STATUSES:
+                last = resp
+                delay = self._sleep_before_retry(resp, delay)
+                continue
             raise RuntimeError(f"GCS read {name} failed ({resp.status_code}): "
                                f"{resp.text[:200]}")
-        # The generation of the bytes just read; needed for the conditional write.
-        return resp.content, int(resp.headers.get("x-goog-generation", 0))
+        raise RuntimeError(
+            f"GCS read {name} failed after {tries} attempts "
+            f"({last.status_code if last else '?'}): "
+            f"{last.text[:200] if last else ''}")
 
-    def write(self, name: str, payload: bytes, if_generation_match: int) -> int:
-        resp = self.session.post(
-            self._WRITE.format(bucket=self.bucket, name=self._quote(name),
-                               gen=if_generation_match),
-            data=payload, headers={"Content-Type": "application/json"}, timeout=30)
-        if resp.status_code == 412:
-            raise PreconditionFailed(f"{name}: generation moved on")
-        if resp.status_code not in (200, 201):
+    def write(self, name: str, payload: bytes, if_generation_match: int,
+              tries: int = 5) -> int:
+        delay, last = 0.5, None
+        for _ in range(tries):
+            resp = self.session.post(
+                self._WRITE.format(bucket=self.bucket, name=self._quote(name),
+                                   gen=if_generation_match),
+                data=payload, headers={"Content-Type": "application/json"},
+                timeout=30)
+            if resp.status_code == 412:
+                # Lost the race. Never retried -- it is an answer, not a failure.
+                raise PreconditionFailed(f"{name}: generation moved on")
+            if resp.status_code in (200, 201):
+                return int(resp.json().get("generation", 0))
+            if resp.status_code in self._RETRY_STATUSES:
+                last = resp
+                delay = self._sleep_before_retry(resp, delay)
+                continue
             raise RuntimeError(f"GCS write {name} failed ({resp.status_code}): "
                                f"{resp.text[:200]}")
-        return int(resp.json().get("generation", 0))
+        raise RuntimeError(
+            f"GCS write {name} failed after {tries} attempts "
+            f"({last.status_code if last else '?'}): "
+            f"{last.text[:200] if last else ''}")
 
 
 # --------------------------------------------------------------------------

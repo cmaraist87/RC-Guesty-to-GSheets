@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 
 import requests
 
+# lease_lock has no dependency on this module, so the import is one-directional.
+# Its Cloud Storage client is loaded lazily inside GCSObjectStore, so importing
+# here does not pull google-auth into a run that never touches the shared cache.
+from lease_lock import LeaseLock, LockBusy, PreconditionFailed
+
 TOKEN_URL = "https://open-api.guesty.com/oauth2/token"
 BASE_URL = "https://open-api.guesty.com/v1"
 DEFAULT_TOKEN_CACHE = ".guesty_token.json"
@@ -33,27 +38,43 @@ def _now() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
-def get_access_token(
-    client_id: str,
-    client_secret: str,
-    cache_path: str | None = DEFAULT_TOKEN_CACHE,
-    session: requests.Session | None = None,
-) -> str:
-    """Return a valid bearer token, reusing a cached one until it nears expiry."""
+def _is_live(expires_at, clock=None) -> bool:
+    """Is this token still good, allowing for clock skew and request latency?"""
+    now = (clock or _now)()
+    return bool(expires_at) and float(expires_at) - _EXPIRY_SKEW_SEC > now
+
+
+def read_local_token(cache_path: str | None = DEFAULT_TOKEN_CACHE) -> tuple[str, float]:
+    """(token, expires_at) from the on-disk cache, or ("", 0) if unusable."""
+    if not cache_path or not os.path.exists(cache_path):
+        return "", 0.0
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+        return str(cached.get("access_token") or ""), float(cached.get("expires_at") or 0)
+    except (ValueError, OSError, TypeError):
+        return "", 0.0  # a corrupt cache is the same as no cache
+
+
+def write_local_token(cache_path: str | None, token: str, expires_at: float) -> None:
+    if not cache_path:
+        return
+    try:
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump({"access_token": token, "expires_at": expires_at}, fh)
+    except OSError:
+        pass  # a cache we cannot write is a slower run, not a failed one
+
+
+def mint_token(client_id: str, client_secret: str,
+               session: requests.Session | None = None) -> tuple[str, float]:
+    """Spend one of the account's scarce token requests. (token, expires_at).
+
+    Every caller of this is burning quota, so it lives in one place and every path
+    that reaches it should have already failed to find a usable cached token.
+    """
     if not client_id or not client_secret:
         raise GuestyError("Missing Guesty client_id / client_secret.")
-
-    # 1) disk cache
-    if cache_path and os.path.exists(cache_path):
-        try:
-            with open(cache_path, encoding="utf-8") as fh:
-                cached = json.load(fh)
-            if cached.get("access_token") and cached.get("expires_at", 0) - _EXPIRY_SKEW_SEC > _now():
-                return cached["access_token"]
-        except (ValueError, OSError):
-            pass  # ignore a corrupt cache
-
-    # 2) request a new token (OAuth2 client-credentials, form-encoded)
     sess = session or requests.Session()
     resp = sess.post(
         TOKEN_URL,
@@ -89,13 +110,26 @@ def get_access_token(
     if not token:
         raise GuestyError(f"No access_token in token response: {str(data)[:300]}")
     expires_in = int(data.get("expires_in", 86400))
+    return token, _now() + expires_in
 
-    if cache_path:
-        try:
-            with open(cache_path, "w", encoding="utf-8") as fh:
-                json.dump({"access_token": token, "expires_at": _now() + expires_in}, fh)
-        except OSError:
-            pass
+
+def get_access_token(
+    client_id: str,
+    client_secret: str,
+    cache_path: str | None = DEFAULT_TOKEN_CACHE,
+    session: requests.Session | None = None,
+) -> str:
+    """A valid bearer token, reusing the on-disk cache until it nears expiry.
+
+    Single-process behaviour, unchanged. When two runtimes share one account, use
+    SharedTokenCache instead -- this path has no way to stop each of them minting
+    its own token.
+    """
+    token, expires_at = read_local_token(cache_path)
+    if token and _is_live(expires_at):
+        return token
+    token, expires_at = mint_token(client_id, client_secret, session)
+    write_local_token(cache_path, token, expires_at)
     return token
 
 
@@ -231,3 +265,164 @@ def _fail_msg(what: str, outcome: str, url: str, params: dict, seen: list) -> st
             f"  url     : {url}\n"
             f"  attempts: {attempts}\n"
             f"  fields  : {fields}")
+
+
+# --------------------------------------------------------------------------
+# Shared token cache
+#
+# The 4 AM cron and an on-demand handler draw on ONE token quota. Left to
+# themselves each would mint its own -- and a handler that scales to several
+# instances would mint one per instance, exhausting the day's allowance in
+# minutes and taking the cron down with it. So the token lives in a single
+# object both runtimes can read, and exactly one of them may refresh it.
+# --------------------------------------------------------------------------
+TOKEN_OBJECT = "guesty/token.json"
+TOKEN_LOCK_OBJECT = "locks/guesty-token.json"
+
+
+class StoreUnavailable(RuntimeError):
+    """The shared store could not be reached -- distinct from it saying 'no'."""
+
+
+class SharedTokenCache:
+    """One Guesty token, shared through a GCS object, refreshed by one caller.
+
+    `may_mint` is the whole safety model, and it is asymmetric on purpose:
+
+        cron    (may_mint=True)   one process, so falling back to its own token
+                                  request costs at most one. The daily sync must
+                                  survive a Cloud Storage outage.
+        handler (may_mint=False)  N instances, so falling back would cost N. It
+                                  fails the event instead and lets Guesty retry,
+                                  by which time a minting caller has refreshed.
+
+    Getting that backwards is how a burst of webhooks breaks the next morning's
+    sync, which is the failure this class exists to prevent.
+    """
+
+    def __init__(self, store, name: str = TOKEN_OBJECT, lock=None,
+                 cache_path: str | None = DEFAULT_TOKEN_CACHE,
+                 lease_ttl: float = 120.0, wait: float = 90.0,
+                 session: requests.Session | None = None, clock=None,
+                 sleep=None, minter=None):
+        self.store = store
+        self.name = name
+        self.cache_path = cache_path
+        self.wait = float(wait)
+        self.session = session
+        self._clock = clock or _now
+        self._sleep = sleep or time.sleep
+        # Injectable so tests can prove "exactly one mint" without spending quota.
+        self._mint = minter or mint_token
+        self.lock = lock or LeaseLock(
+            store, name=TOKEN_LOCK_OBJECT, ttl=lease_ttl, poll=1.0,
+            holder="guesty-token-refresh", clock=self._clock, sleep=self._sleep)
+
+    # -- store access ------------------------------------------------------
+    def _read(self):
+        """(token, expires_at, generation). Raises StoreUnavailable if unreachable."""
+        try:
+            payload, generation = self.store.read(self.name)
+        except Exception as e:                        # noqa: BLE001
+            raise StoreUnavailable(str(e)) from e
+        if not payload:
+            return "", 0.0, generation
+        try:
+            d = json.loads(payload.decode("utf-8"))
+            return (str(d.get("access_token") or ""),
+                    float(d.get("expires_at") or 0), generation)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            # Corrupt object: treat as absent so a refresh can overwrite it,
+            # rather than wedging every caller on unparseable bytes.
+            return "", 0.0, generation
+
+    def _live_token(self) -> str:
+        token, expires_at, _ = self._read()
+        return token if (token and _is_live(expires_at, self._clock)) else ""
+
+    def _store_token(self, token: str, expires_at: float, generation: int) -> None:
+        body = json.dumps({"access_token": token,
+                           "expires_at": expires_at}).encode("utf-8")
+        try:
+            self.store.write(self.name, body, if_generation_match=generation)
+        except PreconditionFailed:
+            # Someone refreshed while we were minting. Theirs is just as valid and
+            # ours still works for this call, so this is not an error.
+            pass
+        except Exception as e:                        # noqa: BLE001
+            raise StoreUnavailable(str(e)) from e
+
+    # -- fallback ----------------------------------------------------------
+    def _fallback(self, client_id, client_secret, may_mint, why) -> str:
+        token, expires_at = read_local_token(self.cache_path)
+        if token and _is_live(expires_at, self._clock):
+            print(f"   (shared token cache unreachable: {why}; using the local cache)")
+            return token
+        if not may_mint:
+            raise GuestyError(
+                f"Shared token cache unreachable ({why}) and no valid local token. "
+                "This caller may not mint one -- several instances doing so would "
+                "exhaust the daily quota and break the scheduled sync. Failing this "
+                "attempt instead; it is safe to retry once the cache is reachable.")
+        print(f"   (shared token cache unreachable: {why}; minting a token locally)")
+        token, expires_at = self._mint(client_id, client_secret, self.session)
+        write_local_token(self.cache_path, token, expires_at)
+        return token
+
+    # -- api ---------------------------------------------------------------
+    def get(self, client_id: str = "", client_secret: str = "",
+            may_mint: bool = True) -> str:
+        """A valid token, minting one only if this caller is allowed to."""
+        # 1) The overwhelmingly common path: a live token, no lock, no mint.
+        try:
+            token = self._live_token()
+            if token:
+                return token
+        except StoreUnavailable as e:
+            return self._fallback(client_id, client_secret, may_mint, str(e))
+
+        # 2) Needs refreshing, and we may not. Someone else may be mid-refresh, so
+        #    give them a moment -- but never take the lease, which would only get
+        #    in the refresher's way.
+        if not may_mint:
+            deadline = self._clock() + self.wait
+            while self._clock() < deadline:
+                self._sleep(1.0)
+                try:
+                    token = self._live_token()
+                except StoreUnavailable as e:
+                    return self._fallback(client_id, client_secret, may_mint, str(e))
+                if token:
+                    return token
+            raise GuestyError(
+                "No valid Guesty token in the shared cache and this caller may not "
+                f"mint one (waited {self.wait:g}s for a refresh). Retry later; the "
+                "scheduled sync refreshes the token daily.")
+
+        # 3) We may mint. Take the lease so that only one caller does.
+        try:
+            with self.lock.hold(wait=self.wait):
+                # Re-read INSIDE the lease: whoever we queued behind has very
+                # likely just refreshed, and minting again would waste the quota
+                # this whole mechanism exists to protect.
+                token, expires_at, generation = self._read()
+                if token and _is_live(expires_at, self._clock):
+                    return token
+                token, expires_at = self._mint(client_id, client_secret, self.session)
+                self._store_token(token, expires_at, generation)
+                write_local_token(self.cache_path, token, expires_at)
+                return token
+        except LockBusy:
+            # The holder should have written a token by now.
+            try:
+                token = self._live_token()
+            except StoreUnavailable as e:
+                return self._fallback(client_id, client_secret, may_mint, str(e))
+            if token:
+                return token
+            raise GuestyError(
+                "Timed out waiting for another caller to refresh the Guesty token, "
+                "and no valid token appeared. A refresh may have died mid-flight; "
+                "the lease expires on its own, so a retry should succeed.")
+        except StoreUnavailable as e:
+            return self._fallback(client_id, client_secret, may_mint, str(e))
