@@ -74,6 +74,27 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `SYNC_LISTING_CITIES` | *(off)* | Set `1` to resolve **City** from Guesty's listings (one extra call per run) instead of relying on `property_to_city.csv`. Fail-soft: if the call errors, the run continues on the CSV alone. |
 | `SYNC_FIELDS_MODE` | `objects` | Diagnostic. `paths` asks Guesty for dotted field paths (`listing.address.city`). The live API **rejected** this on 2026-08-21 and the run failed, so leave it unset unless you are testing. |
 
+### Columns you add are yours and are never overwritten
+A tab's columns fall into three groups:
+
+| Group | Examples | What a rewrite does |
+|---|---|---|
+| **Pipeline-owned** | `Date`, `Property`, `Guest`, `Check out - Time`, `T/O` | Replaced with the fresh value |
+| **Checkboxes** | `assigned`, `Verified`, `OUT`, `IN` | Tick carried over; `FALSE` on a new row |
+| **Everything else** | anything you add — `Shift ID`, notes, tracking | **Carried over untouched**; blank on a new row |
+
+So you can add a column to a monthly tab and the sync will leave it alone. Ownership
+is decided by exclusion, so nothing needs registering in code first.
+
+> Before this, a column the sync didn't recognise was blanked whenever its row was
+> rewritten as *updated* — silently, and only on rows that changed.
+
+### Two confirmation codes on a turnover row
+A turnover is one property-day involving **two** reservations: one departing, one
+arriving. `Out Code` and `In Code` carry them separately, so either side can be found
+by code. `Confirmation Code` is unchanged — it still shows the arriving stay on a
+turnover, the only stay on any other day.
+
 ### Only five markets reach the sheet
 `New Orleans`, `Bay St. Louis`, `Austin`, `Savannah`, `Thunderbolt`. Guesty holds
 listings well outside these; those reservations are **dropped before any tab is

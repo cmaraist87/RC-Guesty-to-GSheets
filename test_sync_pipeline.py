@@ -297,6 +297,100 @@ def test_moves_alone_never_trip_the_guard():
     print("OK: 30 moves and zero cancellations leave the guard untripped")
 
 
+def test_turnover_row_keeps_both_confirmation_codes():
+    """On a turnover date a check-out and a check-in share one (Property, Date).
+    A single guest_lookup meant the check-in pass overwrote the check-out pass, so
+    the DEPARTING reservation's code vanished from the one row a cleaner works --
+    and a cancellation of that stay could never be found by code."""
+    res = [
+        {"confirmationCode": "CODE-OUTGOING", "status": "confirmed",
+         "guest": {"fullName": "Departing Guest"},
+         "listing": {"nickname": "1022 Mandeville", "address": {"city": "New Orleans"}},
+         "checkInDateLocalized": "2026-08-10", "checkOutDateLocalized": "2026-08-14"},
+        {"confirmationCode": "CODE-INCOMING", "status": "confirmed",
+         "guest": {"fullName": "Arriving Guest"},
+         "listing": {"nickname": "1022 Mandeville", "address": {"city": "New Orleans"}},
+         "checkInDateLocalized": "2026-08-14", "checkOutDateLocalized": "2026-08-18"},
+    ]
+    out = process_reservations(*reservations_to_frames(res))
+    by_date = {r["Date"]: r for _, r in out.iterrows()}
+
+    to = by_date["2026-08-14"]
+    assert to["T/O"] == "yes", to.to_dict()
+    # Both sides of the handover are now addressable on the turnover row.
+    assert to["Out Code"] == "CODE-OUTGOING", to.to_dict()
+    assert to["In Code"] == "CODE-INCOMING", to.to_dict()
+    # ...and the pre-existing column keeps its old meaning exactly: check-in wins.
+    assert to["Confirmation Code"] == "CODE-INCOMING", to.to_dict()
+    assert to["Guest"] == "Arriving Guest", to.to_dict()
+
+    # A check-in-only day carries no departing code, and vice versa.
+    arrive = by_date["2026-08-10"]
+    assert arrive["Out Code"] == "" and arrive["In Code"] == "CODE-OUTGOING", arrive.to_dict()
+    depart = by_date["2026-08-18"]
+    assert depart["Out Code"] == "CODE-INCOMING" and depart["In Code"] == "", depart.to_dict()
+
+    # The departing stay is now findable by code on the turnover row -- the whole point.
+    hits = out[(out["Out Code"] == "CODE-OUTGOING") | (out["In Code"] == "CODE-OUTGOING")]
+    assert "2026-08-14" in set(hits["Date"]), hits.to_string()
+    print("OK: turnover row carries both the departing and arriving codes")
+
+
+def test_operator_columns_survive_a_rewrite():
+    """A column the sync does not own must not be blanked when its row is rewritten
+    as 'updated'. Shift IDs written during the day were being erased by the next
+    nightly run, silently, and only on rows that changed."""
+    header = LIVE_HEADER + ["Shift ID", "Shift Synced", "Crew Notes"]
+    existing = pd.DataFrame([
+        dict(zip(header, ["New Orleans", "Sunday", "2026-11-01", "HM2HTCNFT5",
+                          "James Cull", "TRUE", "1022 Mandeville", "FALSE",
+                          "09:00 AM", "FALSE", "", "FALSE", "", "", "", "",
+                          "CT-SHIFT-991", "2026-11-01T10:04:00Z", "gate code 4417"])),
+    ], columns=header).astype(str)
+
+    # Same slot, changed check-out time -> the row is rewritten as "updated".
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing)
+
+    assert stats["updated"] == 1, stats
+    row = full.iloc[0]
+    assert row["Shift ID"] == "CT-SHIFT-991", row.to_dict()
+    assert row["Shift Synced"] == "2026-11-01T10:04:00Z", row.to_dict()
+    assert row["Crew Notes"] == "gate code 4417", row.to_dict()
+    # The pipeline still owns its own columns -- the new time did land.
+    assert row["Check out - Time"] == "11:00 AM", row.to_dict()
+    # And the checkbox tick still carries, as before.
+    assert row["assigned"] == "TRUE", row.to_dict()
+
+    # A genuinely new row gets blanks, not inherited operator values.
+    fresh = merge_reservations_into_sheet(
+        pd.DataFrame([dict(CANDIDATE, Property="6 Lake", City="Savannah")]),
+        pd.DataFrame(columns=header))[0].iloc[0]
+    assert fresh["Shift ID"] == "" and fresh["Crew Notes"] == "", fresh.to_dict()
+    print("OK: operator columns carry across a rewrite; new rows start empty")
+
+
+def test_operator_column_carries_from_a_duplicate_row():
+    """Duplicate rows share one slot and are all superseded together. A Shift ID set
+    on the second copy must survive, exactly as a checkbox tick does."""
+    header = LIVE_HEADER + ["Shift ID"]
+    base = ["New Orleans", "Sunday", "2026-11-01", "HM2HTCNFT5", "James Cull",
+            "FALSE", "1022 Mandeville", "FALSE", "09:00 AM", "FALSE", "", "FALSE",
+            "", "", "", ""]
+    existing = pd.DataFrame([
+        dict(zip(header, base + [""])),               # first copy: no shift
+        dict(zip(header, base + ["CT-SHIFT-772"])),   # second copy holds it
+    ], columns=header).astype(str)
+
+    full, stats, _ = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing)
+
+    assert stats["removed"] == 2, stats
+    assert len(full) == 1, full.to_string()
+    assert full.iloc[0]["Shift ID"] == "CT-SHIFT-772", full.iloc[0].to_dict()
+    print("OK: operator value on a duplicate row survives the collapse")
+
+
 def test_city_filter_keeps_only_covered_markets():
     """Guesty carries listings this team does not service. Those rows are not a data
     gap to be filled -- they must never reach a tab."""
@@ -516,6 +610,9 @@ if __name__ == "__main__":
     test_reassignment_is_reported_as_moved_not_cancelled()
     test_cancel_guard_counts_cancellations_but_not_moves()
     test_moves_alone_never_trip_the_guard()
+    test_turnover_row_keeps_both_confirmation_codes()
+    test_operator_columns_survive_a_rewrite()
+    test_operator_column_carries_from_a_duplicate_row()
     test_city_filter_keeps_only_covered_markets()
     test_out_of_scope_rows_are_not_struck_as_cancelled()
     test_blank_city_is_unknown_not_out_of_scope()

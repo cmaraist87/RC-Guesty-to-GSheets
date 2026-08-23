@@ -161,6 +161,34 @@ def _carry_checkbox(carry, col) -> str:
     return seen or "FALSE"
 
 
+def _carry_operator(carry, col) -> str:
+    """The value an OPERATOR column keeps when its row is rewritten.
+
+    A column the sync does not own -- Shift ID, notes, anything added alongside the
+    pipeline's own -- used to be blanked whenever the merge rebuilt a row as
+    "updated", because the builder started every cell empty and only filled the
+    columns it recognised. That silently severed such a column from its row on the
+    next nightly run, and only for rows that happened to change.
+
+    Ownership is decided by exclusion, deliberately: a column the pipeline writes is
+    pipeline-owned, a column carrying checkbox validation is a tick, and ANYTHING
+    ELSE belongs to whoever put it there. That way a new operator column works the
+    day it is added, with no list here to keep in step.
+
+    Like the checkbox carry, the first non-empty value across every superseded
+    duplicate wins, so a value set on a later copy is not lost. Empty for a
+    genuinely new row.
+    """
+    if carry is None:
+        return ""
+    for row in carry:
+        if col in row.index:
+            v = str(row[col]).strip()
+            if v:
+                return v
+    return ""
+
+
 def norm_city(v) -> str:
     """Canonical form for comparing city names.
 
@@ -438,6 +466,10 @@ def merge_reservations_into_sheet(
             to_append[col] = new_rows[src].values
         elif col in checkbox_cols:
             to_append[col] = [_carry_checkbox(carry, col) for carry in carry_rows]
+        else:
+            # Not written by the pipeline and not a tick -> an operator column.
+            # Carry it, never blank it (see _carry_operator).
+            to_append[col] = [_carry_operator(carry, col) for carry in carry_rows]
 
     # Full corrected sheet = kept existing (minus superseded + empty filler) + new/updated
     delete_row_nums = {m["row"] for m in delete_rows}

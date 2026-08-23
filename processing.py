@@ -201,7 +201,13 @@ def process_reservations(
 
     checkout_lookup = {}
     checkin_lookup  = {}
-    guest_lookup    = {}
+    # Departing and arriving reservations are tracked SEPARATELY. A single
+    # guest_lookup keyed on (prop, date) meant the check-in pass overwrote whatever
+    # the check-out pass had written, so on a turnover date -- the one date where
+    # both exist, and the only date a cleaner actually works -- the departing
+    # reservation's confirmation code was silently lost.
+    checkout_guest  = {}   # (prop, date) -> (conf code, guest) of the DEPARTING stay
+    checkin_guest   = {}   # (prop, date) -> (conf code, guest) of the ARRIVING stay
 
     for row in df_checkout.to_dict(orient="records"):
         props   = normalize_property(row['LISTING'])
@@ -210,7 +216,7 @@ def process_reservations(
         city    = str(row.get("LISTING'S CITY", '')).strip()
         for prop in props:
             checkout_lookup[(prop, co_date)] = co_dt.strftime("%I:%M %p")
-            guest_lookup[(prop, co_date)]    = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
+            checkout_guest[(prop, co_date)]  = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
             if city and city.lower() != 'nan':
                 city_lookup[prop] = city
                 city_by_key[_canonical_key(prop)] = city
@@ -222,7 +228,7 @@ def process_reservations(
         city    = str(row.get("LISTING'S CITY", '')).strip()
         for prop in props:
             checkin_lookup[(prop, ci_date)] = ci_dt.strftime("%I:%M %p")
-            guest_lookup[(prop, ci_date)]   = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
+            checkin_guest[(prop, ci_date)]  = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
             if city and city.lower() != 'nan':
                 city_lookup[prop] = city
                 city_by_key[_canonical_key(prop)] = city
@@ -236,7 +242,14 @@ def process_reservations(
         date_obj  = datetime.strptime(date, "%Y-%m-%d")
         co_time   = checkout_lookup.get((prop, date), "")
         ci_time   = checkin_lookup.get((prop, date), "")
-        conf_code, guest = guest_lookup.get((prop, date), ('', ''))
+        out_conf, out_guest = checkout_guest.get((prop, date), ('', ''))
+        in_conf,  in_guest  = checkin_guest.get((prop, date), ('', ''))
+        # `Confirmation Code` / `Guest` keep exactly their old meaning: the check-in
+        # pass used to write last and therefore win, so prefer the arriving stay and
+        # fall back to the departing one. Existing consumers see no change; the two
+        # new columns are what make a turnover row unambiguous.
+        conf_code = in_conf  or out_conf
+        guest     = in_guest or out_guest
         output_rows.append({
             'City':              city_lookup.get(prop) or city_by_key.get(_canonical_key(prop), ""),
             'Day':               date_obj.strftime("%A"),
@@ -248,10 +261,16 @@ def process_reservations(
             'Check-in Time':     ci_time,
             'T/O':               "yes" if (co_time and ci_time) else "",
             'Adjustments':       compute_adjustments(co_time, ci_time),
+            'Out Code':          out_conf,
+            'In Code':           in_conf,
         })
 
+    # New columns are APPENDED so every existing column keeps its position -- the
+    # Gradio export and the sheet both align by name, but nothing gains from
+    # reshuffling a layout people read every morning.
     df_out = pd.DataFrame(output_rows, columns=[
         'City', 'Day', 'Date', 'Confirmation Code', 'Guest', 'Property',
-        'Check-out Time', 'Check-in Time', 'T/O', 'Adjustments'
+        'Check-out Time', 'Check-in Time', 'T/O', 'Adjustments',
+        'Out Code', 'In Code'
     ])
     return df_out.sort_values(by=['Date', 'City', 'Property']).reset_index(drop=True)
