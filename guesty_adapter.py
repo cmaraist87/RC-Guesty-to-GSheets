@@ -37,6 +37,12 @@ FIELD_MAP: dict[str, list[str]] = {
     # Human-facing listing name; must resemble the old CSV "LISTING" values so
     # processing.normalize_property parses it the same way.
     "listing":     ["listing.nickname", "listing.title", "listingId.nickname", "listing.name"],
+    # The listing's STABLE identity. Nicknames are not unique -- two live listings
+    # can share one ("Billing 2348 Constance V3" has two ids) -- and they are
+    # renamed constantly, so anything reasoning about "which listing changed" has
+    # to carry the id, not the name. Ordered so a populated `listing` object wins
+    # before the raw `listingId` scalar.
+    "listing_id":  ["listing._id", "listingId._id", "listingId", "listing.id"],
     "guest":       ["guest.fullName", "guest.firstName", "guestId.fullName"],
     "conf_code":   ["confirmationCode", "reservationId", "_id"],
     "city":        ["listing.address.city", "listingId.address.city", "listing.city"],
@@ -49,10 +55,24 @@ FIELD_MAP: dict[str, list[str]] = {
     "checkout_time": ["plannedDeparture", "checkOutTime"],
 }
 
+# LISTING ID is appended, so the manual CSV exports (which have no such column)
+# still line up positionally and every existing consumer is unaffected.
 CHECKOUT_COLUMNS = ["LISTING", "CHECK-OUT DATE", "CHECK-OUT TIME",
-                    "CONFIRMATION CODE", "GUEST", "LISTING'S CITY"]
+                    "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID"]
 CHECKIN_COLUMNS = ["LISTING", "CHECK-IN DATE", "CHECK-IN TIME",
-                   "CONFIRMATION CODE", "GUEST", "LISTING'S CITY"]
+                   "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID"]
+
+
+def _as_id(value) -> str:
+    """A listing id as a plain string.
+
+    `listingId` is sometimes a bare id and sometimes a populated object, depending
+    on the projection Guesty answers with, so unwrap the object case rather than
+    stringifying a dict into the frame.
+    """
+    if isinstance(value, dict):
+        value = value.get("_id") or value.get("id") or ""
+    return "" if value is None else str(value).strip()
 
 
 def _dig(obj: Any, dotted: str) -> Any:
@@ -147,6 +167,7 @@ def reservations_to_frames(reservations: list[dict]) -> tuple[pd.DataFrame, pd.D
         guest = _first(res, FIELD_MAP["guest"])
         conf = _first(res, FIELD_MAP["conf_code"])
         city = _first(res, FIELD_MAP["city"])
+        listing_id = _as_id(_first(res, FIELD_MAP["listing_id"]))
         if not listing:
             continue  # can't place a reservation without a listing name
 
@@ -165,11 +186,13 @@ def reservations_to_frames(reservations: list[dict]) -> tuple[pd.DataFrame, pd.D
             co_rows.append({
                 "LISTING": listing, "CHECK-OUT DATE": co_date, "CHECK-OUT TIME": co_time,
                 "CONFIRMATION CODE": conf, "GUEST": guest, "LISTING'S CITY": city,
+                "LISTING ID": listing_id,
             })
         if ci_date:
             ci_rows.append({
                 "LISTING": listing, "CHECK-IN DATE": ci_date, "CHECK-IN TIME": ci_time,
                 "CONFIRMATION CODE": conf, "GUEST": guest, "LISTING'S CITY": city,
+                "LISTING ID": listing_id,
             })
 
     df_co = pd.DataFrame(co_rows, columns=CHECKOUT_COLUMNS)

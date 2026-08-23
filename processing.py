@@ -63,6 +63,17 @@ _EXCLUDE_KEYS = {_canonical_key(p) for p in EXCLUDE_PROPERTIES}
 
 def normalize_property(listing: str) -> list:
     raw = listing.split('/')[0].strip()
+
+    # "Billing …" listings are accounting placeholders, not places anyone cleans.
+    # The live catalogue holds ~1900 listings and a large share are these; the
+    # prefix was previously kept, so "Billing 3223 Canal MU V1" would have become
+    # a property named "Billing 3223 Canal" and appeared in the schedule as a job.
+    # Stripping the prefix instead would be worse: the row would merge into the
+    # REAL "3223 Canal" and invent a turnover from a billing record. Neither is a
+    # property, so it maps to nothing at all.
+    if re.match(r'^billing\b', raw, re.I):
+        return []
+
     raw = re.sub(r'^F2X?\s+', '', raw)
 
     abbreviations = {

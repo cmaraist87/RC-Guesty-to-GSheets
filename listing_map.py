@@ -78,7 +78,7 @@ class ListingIndex:
     this module never fetches anything itself.
     """
 
-    def __init__(self, listings=()):
+    def __init__(self, listings=(), allow_name_keys: bool = False):
         self._nickname: dict[str, str] = {}
         self._properties: dict[str, tuple[str, ...]] = {}
         self._ids_by_key: dict[str, list[str]] = {}
@@ -87,6 +87,18 @@ class ListingIndex:
             listing_id, nickname = _extract(entry)
             if not listing_id or not nickname:
                 continue  # nothing to map; the caller's catalogue is incomplete
+            if listing_id == nickname and not allow_name_keys:
+                # Identity must be the listing id. Nicknames are NOT unique -- the
+                # live catalogue has "Billing 2348 Constance V3" under two distinct
+                # ids -- so keying by name merges two listings into one and reports
+                # the result as CLEAN. That is the dangerous direction: a caller
+                # would then query one listing, miss the other's reservations, and
+                # could clear a turnover that is still justified. Refuse loudly
+                # rather than answer confidently and wrongly.
+                raise ValueError(
+                    f"listing id equals the nickname ({listing_id!r}) -- this index "
+                    "looks name-keyed. Pass real Guesty listing ids, or set "
+                    "allow_name_keys=True for offline analysis where ids are unavailable.")
             props = tuple(normalize_property(nickname))
             self._nickname[listing_id] = nickname
             self._properties[listing_id] = props

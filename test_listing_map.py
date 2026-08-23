@@ -102,6 +102,43 @@ def test_unknown_listing_is_reported_not_raised():
     print("OK: an unknown listing id reports unknown rather than raising")
 
 
+def test_two_ids_sharing_a_nickname_are_shared_not_clean():
+    """The real failure, from the live catalogue: 'Billing 2348 Constance V3' exists
+    under two distinct listing ids. Keyed by id they are correctly SHARED. Keyed by
+    name they collapse into one entry and report CLEAN -- a false clean, which is
+    the dangerous direction: a caller would query one listing, miss the other's
+    reservations, and could clear a turnover that is still justified."""
+    same_name = "2348 Constance V3"
+    by_id = ListingIndex([("5ed5c327d14a6f00293de0e4", same_name),
+                          ("5fdb9330bd48050031e8f554", same_name)])
+
+    a = by_id.resolve("5ed5c327d14a6f00293de0e4")
+    b = by_id.resolve("5fdb9330bd48050031e8f554")
+    assert a.kind == SHARED and b.kind == SHARED, (a.kind, b.kind)
+    assert a.siblings == ("5fdb9330bd48050031e8f554",), a
+    assert b.siblings == ("5ed5c327d14a6f00293de0e4",), b
+    assert a.is_clean is False and b.is_clean is False
+
+    # The same two listings keyed by name -- one entry, and it looks safe.
+    by_name = ListingIndex([(same_name, same_name)], allow_name_keys=True)
+    assert by_name.resolve(same_name).kind == CLEAN, "fixture no longer reproduces the bug"
+    assert len(by_name) == 1 and len(by_id) == 2
+    print("OK: two ids under one nickname are shared by id, falsely clean by name")
+
+
+def test_name_keyed_index_is_refused():
+    """The mistake that produced the false clean was silent. It is now loud."""
+    try:
+        ListingIndex([("1022 Mandeville", "1022 Mandeville")])
+        raise AssertionError("a name-keyed index was accepted")
+    except ValueError as e:
+        assert "name-keyed" in str(e), e
+    # Offline analysis with no ids available must opt in explicitly.
+    idx = ListingIndex([("1022 Mandeville", "1022 Mandeville")], allow_name_keys=True)
+    assert idx.resolve("1022 Mandeville").is_clean
+    print("OK: an accidentally name-keyed index raises instead of answering")
+
+
 def test_combined_lists_everything_needing_review():
     idx = ListingIndex(LISTINGS)
     flagged = {r.listing_id for r in idx.combined()}
@@ -132,6 +169,8 @@ if __name__ == "__main__":
     test_sharing_is_detected_across_spelling_drift()
     test_a_listing_can_be_both_split_and_shared()
     test_unknown_listing_is_reported_not_raised()
+    test_two_ids_sharing_a_nickname_are_shared_not_clean()
+    test_name_keyed_index_is_refused()
     test_combined_lists_everything_needing_review()
     test_incomplete_catalogue_entries_are_skipped()
     print("\nALL LISTING-MAP TESTS PASSED")
