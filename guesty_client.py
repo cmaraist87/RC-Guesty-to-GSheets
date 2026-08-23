@@ -408,6 +408,15 @@ class SharedTokenCache:
                 token, expires_at, generation = self._read()
                 if token and _is_live(expires_at, self._clock):
                     return token
+                # Before spending quota, check whether this machine already holds a
+                # live token. On the very first run the shared object is empty while
+                # a perfectly good token often sits on disk from a previous run --
+                # minting there would waste a request purely because the cache is new.
+                local, local_exp = read_local_token(self.cache_path)
+                if local and _is_live(local_exp, self._clock):
+                    print("   (seeding the shared token cache from the local one)")
+                    self._store_token(local, local_exp, generation)
+                    return local
                 token, expires_at = self._mint(client_id, client_secret, self.session)
                 self._store_token(token, expires_at, generation)
                 write_local_token(self.cache_path, token, expires_at)

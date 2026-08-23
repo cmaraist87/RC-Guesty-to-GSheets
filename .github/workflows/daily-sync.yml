@@ -55,20 +55,11 @@ jobs:
             fi
           fi
 
-      # Guesty allows only ~5 access-token requests per API key per 24h. A runner is
-      # ephemeral, so without this every run burns one and a handful of manual runs
-      # in a day exhausts the quota -- taking the scheduled run down with it. The
-      # token file carries its own expiry and is refreshed when close to it.
-      # NOTE: this stores a bearer token in the repo's Actions cache, which anyone
-      # with repo access can read. Delete the cache if the key is ever rotated.
-      - name: Restore cached Guesty token
-        if: steps.guard.outputs.run == 'yes'
-        uses: actions/cache@v4
-        with:
-          path: .guesty_token.json
-          key: guesty-token-${{ github.run_id }}
-          restore-keys: guesty-token-
-
+      # The Guesty token now lives in Cloud Storage (STATE_BUCKET), shared with any
+      # other runtime on this account. The actions/cache step that used to sit here
+      # is deliberately gone: two caches would drift, this run would keep reviving a
+      # stale local token on its own schedule, and each runtime would end up minting
+      # separately -- the exact quota exhaustion the shared cache exists to prevent.
       - name: Run sync
         if: steps.guard.outputs.run == 'yes'
         env:
@@ -87,6 +78,9 @@ jobs:
           #   SYNC_LISTING_CITIES=1    resolve City from /listings instead of the CSV
           SYNC_FIELDS_MODE: ${{ vars.SYNC_FIELDS_MODE }}
           SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
+          # Shared state bucket. Unset falls back to the on-disk token cache, which
+          # on an ephemeral runner means minting a token every run.
+          STATE_BUCKET: ${{ vars.STATE_BUCKET }}
           # Manual dispatch only. On a scheduled run this expands to "" and sync.py
           # treats a blank value as unset, so the daily job can never clear a tab.
           SYNC_REPAIR_SHIFTED_TABS: ${{ github.event.inputs.repair_shifted_tabs }}

@@ -263,6 +263,58 @@ def test_lease_holder_that_dies_does_not_wedge_the_cache():
     print("OK: a lease left by a dead refresher lapses and the next caller proceeds")
 
 
+def test_empty_shared_cache_seeds_from_a_live_local_token():
+    """Cutover case: the shared object is empty on its very first use, while a
+    perfectly good token often sits on disk from an earlier run. Minting there
+    would spend quota purely because the cache is new."""
+    now = [1_000.0]
+    store = InMemoryObjectStore()
+    minter = CountingMinter(clock=lambda: now[0])
+    path = _tmp_cache()
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"access_token": "already-have-one",
+                       "expires_at": now[0] + 9_999}, fh)
+        c = _cache(store, lambda: now[0], minter, cache_path=path)
+
+        assert c.get("id", "secret") == "already-have-one"
+        assert minter.calls == 0, "spent quota despite holding a live local token"
+        # ...and it is now shared, so the next runtime does not need the disk.
+        stored = json.loads(store.read("guesty/token.json")[0].decode())
+        assert stored["access_token"] == "already-have-one", stored
+
+        # An EXPIRED local token must not be seeded -- that would share a dead token.
+        store2 = InMemoryObjectStore()
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"access_token": "stale", "expires_at": now[0] - 1}, fh)
+        c2 = _cache(store2, lambda: now[0], minter, cache_path=path)
+        assert c2.get("id", "secret") == "token-1"
+        assert minter.calls == 1
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+    print("OK: an empty shared cache is seeded from a live local token, not a mint")
+
+
+def test_sync_falls_back_when_no_bucket_is_configured():
+    """STATE_BUCKET unset must keep the old single-process behaviour rather than
+    failing -- that is the escape hatch if the bucket is ever unavailable."""
+    import sync
+
+    calls = []
+    import guesty_client
+    real = guesty_client.get_access_token
+    guesty_client.get_access_token = lambda cid, sec, *a, **k: calls.append(cid) or "legacy"
+    try:
+        assert sync.state_store({"state_bucket": ""}) is None
+        assert sync.guesty_token({"state_bucket": "", "client_id": "x",
+                                  "client_secret": "y"}) == "legacy"
+        assert calls == ["x"], calls
+    finally:
+        guesty_client.get_access_token = real
+    print("OK: with no bucket configured the sync uses the local token path")
+
+
 if __name__ == "__main__":
     test_live_token_is_used_without_minting_or_locking()
     test_expired_token_is_refreshed_once()
@@ -275,4 +327,6 @@ if __name__ == "__main__":
     test_corrupt_cache_object_is_replaced_not_fatal()
     test_store_unavailable_is_distinct_from_a_refusal()
     test_lease_holder_that_dies_does_not_wedge_the_cache()
+    test_empty_shared_cache_seeds_from_a_live_local_token()
+    test_sync_falls_back_when_no_bucket_is_configured()
     print("\nALL TOKEN-CACHE TESTS PASSED")

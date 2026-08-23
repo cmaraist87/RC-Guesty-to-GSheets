@@ -111,6 +111,9 @@ def load_config() -> dict:
                           in ("1", "true", "yes", "on"),
         "cities": tuple(c.strip() for c in _env(
             "SYNC_CITIES", ",".join(DEFAULT_CITIES)).split(",") if c.strip()),
+        # Shared state (Guesty token today, more later). Blank disables it and
+        # falls back to the single-process on-disk token cache.
+        "state_bucket": _env("STATE_BUCKET", "rc-guesty-connecteam-state"),
     }
 
 
@@ -151,9 +154,52 @@ def build_filters(cfg: dict) -> list[dict]:
     ]
 
 
+def state_store(cfg: dict):
+    """The shared-state object store, or None when it isn't configured/reachable.
+
+    Same service-account key as the Sheets write, different scope: Sheets access
+    comes from sharing the spreadsheet with the account, Cloud Storage access from
+    roles/storage.objectAdmin on the bucket.
+    """
+    bucket = (cfg.get("state_bucket") or "").strip()
+    if not bucket:
+        return None
+    try:
+        from google.auth.transport.requests import AuthorizedSession
+        from google.oauth2 import service_account
+
+        from lease_lock import GCSObjectStore
+        from sheets_client import service_account_info
+
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info(cfg["sa_json"]),
+            scopes=["https://www.googleapis.com/auth/devstorage.read_write"])
+        return GCSObjectStore(bucket, session=AuthorizedSession(creds))
+    except Exception as e:  # noqa: BLE001 - never let state plumbing fail the sync
+        print(f"!! Could not reach the shared state bucket {bucket!r}: {e}")
+        print("   Falling back to the local token cache for this run.")
+        return None
+
+
+def guesty_token(cfg: dict) -> str:
+    """A Guesty token, shared with every other runtime on this account.
+
+    The cron MAY mint: it is one process, so a fallback costs at most one request
+    and the daily sync has to survive a Cloud Storage outage. An on-demand handler
+    scales to many instances and must pass may_mint=False instead.
+    """
+    from guesty_client import SharedTokenCache, get_access_token
+
+    store = state_store(cfg)
+    if store is None:
+        return get_access_token(cfg["client_id"], cfg["client_secret"])
+    return SharedTokenCache(store).get(cfg["client_id"], cfg["client_secret"],
+                                       may_mint=True)
+
+
 def fetch_from_guesty(cfg: dict) -> list[dict]:
-    from guesty_client import get_access_token, fetch_reservations
-    token = get_access_token(cfg["client_id"], cfg["client_secret"])
+    from guesty_client import fetch_reservations
+    token = guesty_token(cfg)
     filters = build_filters(cfg)
     print(f"Fetching reservations with filters: {json.dumps(filters)}")
     reservations = fetch_reservations(token, filters=filters, fields=requested_fields())
@@ -253,10 +299,10 @@ def listing_city_seed(cfg: dict) -> dict:
     if flag not in ("1", "true", "yes", "on"):
         return {}
     try:
-        from guesty_client import get_access_token, fetch_listings
+        from guesty_client import fetch_listings
         from processing import normalize_property
 
-        token = get_access_token(cfg["client_id"], cfg["client_secret"])
+        token = guesty_token(cfg)
         # No `fields` param on purpose: asking Guesty to project a nested address
         # is exactly what failed on /reservations. Full objects, ~a few hundred.
         listings = fetch_listings(token)

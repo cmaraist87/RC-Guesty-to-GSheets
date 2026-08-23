@@ -34,20 +34,29 @@ _STRIKE_NEW_FLAGS = ("cancelled", "moved")
 _STRIKE_OLD_FLAG = "struck"      # already struck by an earlier run
 
 
-def _load_credentials(sa_json: str):
-    from google.oauth2.service_account import Credentials
+def service_account_info(sa_json: str) -> dict:
+    """Parse GOOGLE_SA_JSON, which may be raw JSON or a path to a key file.
 
+    Public because the same key now authenticates two different services -- Sheets
+    here, Cloud Storage for the shared token cache -- and they need different
+    scopes, so only the parsing is shared.
+    """
     sa_json = (sa_json or "").strip()
     if not sa_json:
         raise RuntimeError("Missing GOOGLE_SA_JSON (service-account key path or JSON).")
     if sa_json.startswith("{"):
-        info = json.loads(sa_json)
-    elif os.path.exists(sa_json):
+        return json.loads(sa_json)
+    if os.path.exists(sa_json):
         with open(sa_json, encoding="utf-8") as fh:
-            info = json.load(fh)
-    else:
-        raise RuntimeError("GOOGLE_SA_JSON is neither valid JSON nor an existing file path.")
-    return Credentials.from_service_account_info(info, scopes=SCOPES)
+            return json.load(fh)
+    raise RuntimeError("GOOGLE_SA_JSON is neither valid JSON nor an existing file path.")
+
+
+def _load_credentials(sa_json: str):
+    from google.oauth2.service_account import Credentials
+
+    return Credentials.from_service_account_info(service_account_info(sa_json),
+                                                 scopes=SCOPES)
 
 
 def open_spreadsheet(sheet_id: str, sa_json: str):
