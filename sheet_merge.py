@@ -243,6 +243,7 @@ def merge_reservations_into_sheet(
     cancel_guard: tuple[float, int] = (0.5, 10),
     validated_checkboxes: frozenset[str] | None = None,
     allowed_cities: frozenset[str] | None = None,
+    out_of_scope_properties: dict | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -274,6 +275,11 @@ def merge_reservations_into_sheet(
         market is out of scope, not because a guest cancelled -- and are reported
         under `changes["out_of_scope"]` for deliberate deletion. Candidates are
         expected to be filtered upstream; this only governs the existing rows.
+    out_of_scope_properties : {canonical property key -> the city that disqualified
+        it}, from the city filter that ran over THIS fetch. Authoritative, because
+        the rows that need this most have a blank City in the sheet and no entry in
+        property_to_city.csv -- both of the other signals are silent on exactly the
+        rows that would otherwise be mislabelled as cancellations.
     """
     candidates = candidates.copy()
 
@@ -410,6 +416,19 @@ def merge_reservations_into_sheet(
             # quietly excused real New Orleans rows from cancellation detection. Fall
             # back to the resolver, and if the city still cannot be established treat
             # the row as in scope so it goes through the normal checks.
+            # Strongest evidence first: THIS run's fetch saw this property and
+            # dropped it for its city. The sheet's own City cell is often blank on
+            # exactly these rows -- they were written before the City lookup worked
+            # -- and property_to_city.csv has never heard of them either, so relying
+            # on either would let a Boston row be struck as a New Orleans
+            # cancellation. That is what happened: 157 "cancellations" where 37 were
+            # real, the rest simply not this sheet's work.
+            dropped_city = (out_of_scope_properties or {}).get(_canonical_key(prop))
+            if dropped_city:
+                out_of_scope_pos.add(i)
+                out_of_scope_city[i] = dropped_city
+                continue
+
             row_city = str(r["City"]).strip() if has_city else ""
             if not row_city:
                 row_city = resolve_city(prop)

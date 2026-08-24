@@ -47,7 +47,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from guesty_adapter import reservations_to_frames, requested_fields, FIELD_MAP, _dig
-from processing import process_reservations
+from processing import _canonical_key, process_reservations
 from sheet_merge import ShiftedLayoutError, merge_reservations_into_sheet, norm_city
 
 # The markets this sheet covers. Guesty holds listings well outside them (Phoenix,
@@ -336,7 +336,7 @@ def listing_city_seed(cfg: dict) -> dict:
         return {}
 
 
-def filter_to_cities(candidates: pd.DataFrame, cities) -> pd.DataFrame:
+def filter_to_cities(candidates: pd.DataFrame, cities) -> tuple[pd.DataFrame, dict]:
     """
     Keep only rows whose City is one this sheet covers, and say what was dropped.
 
@@ -348,9 +348,15 @@ def filter_to_cities(candidates: pd.DataFrame, cities) -> pd.DataFrame:
 
     Rows with a BLANK city are dropped too, and reported separately: a row whose
     market cannot be confirmed must not be assumed in scope.
+
+    Returns (kept, removed) where `removed` maps each dropped property's canonical
+    key to the city that disqualified it. The merge needs that map: an existing
+    sheet row for one of these produces no candidate, and without knowing WHY it
+    would be struck as a cancellation -- telling the team a job was called off when
+    the truth is it was never theirs.
     """
     if "City" not in candidates.columns or candidates.empty:
-        return candidates
+        return candidates, {}
     allowed = {norm_city(c) for c in cities}
     keys = candidates["City"].map(norm_city)
     keep = keys.isin(allowed)
@@ -393,7 +399,16 @@ def filter_to_cities(candidates: pd.DataFrame, cities) -> pd.DataFrame:
                     fh.write(f"| {city} | {len(grp)} | {shown} |\n")
         except OSError:
             pass
-    return candidates.loc[keep].reset_index(drop=True)
+
+    # Only properties with NO surviving row are out of scope; one that kept any row
+    # is in scope and must stay eligible for ordinary cancellation detection.
+    kept_props = {_canonical_key(p) for p in candidates.loc[keep, "Property"]}
+    removed: dict[str, str] = {}
+    for _, r in dropped.iterrows():
+        key = _canonical_key(r["Property"])
+        if key not in kept_props:
+            removed.setdefault(key, str(r["City"]).strip() or "unknown city")
+    return candidates.loc[keep].reset_index(drop=True), removed
 
 
 def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
@@ -410,7 +425,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         resolve = build_city_resolver(pd.DataFrame())
         candidates["City"] = [str(c).strip() or resolve(p) for c, p
                               in zip(candidates["City"], candidates["Property"])]
-    candidates = filter_to_cities(candidates, cfg.get("cities") or DEFAULT_CITIES)
+    candidates, out_of_scope_props = filter_to_cities(
+        candidates, cfg.get("cities") or DEFAULT_CITIES)
     if candidates.empty:
         print("!! Nothing left after the city filter -- check SYNC_CITIES. "
               "Refusing to treat this as a month of cancellations.")
@@ -501,6 +517,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 struck_rows=prior_struck,
                 validated_checkboxes=cb_cols or None,
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
+                out_of_scope_properties=out_of_scope_props,
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
@@ -525,7 +542,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df, cancel_window=None, struck_rows=frozenset(),
                 validated_checkboxes=cb_cols or None,
-                allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES))
+                allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
+                out_of_scope_properties=out_of_scope_props)
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),

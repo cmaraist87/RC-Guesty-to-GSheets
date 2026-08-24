@@ -219,6 +219,90 @@ def _summary_of(run) -> str:
         os.unlink(path)
 
 
+def test_live_run_actually_paints_strikethrough_and_highlight():
+    """End to end on a LIVE run: a cancelled row must come out struck and a new row
+    highlighted. Every run so far has been a dry run, which paints nothing by
+    design, so this asserts the marks reach the sheet once one actually writes."""
+    class MarkingSS(FakeSS):
+        def __init__(self, wss):
+            super().__init__(wss)
+            self.requests = []
+
+        def batch_update(self, body):
+            self.requests.extend(body["requests"])
+
+        def fetch_sheet_metadata(self, params=None):
+            return {"sheets": [{"data": [{"rowData": []}]}]}   # nothing marked yet
+
+    # One live row that Guesty still has, one it no longer does.
+    live = _row("New Orleans", "Wednesday", "2026-08-05", "HA-AUG1", "Aug Guest",
+                "FALSE", "1201 N Roman", "11:00 AM", "04:00 PM", "", "")
+    gone = _row("New Orleans", "Thursday", "2026-08-06", "HA-DEAD", "Ghost",
+                "FALSE", "3223 Canal", "11:00 AM", "", "", "")
+    ago = FakeWS("Agosto 2026", [HEADER, live, gone])
+    fake = MarkingSS([ago])
+    ago.spreadsheet = fake
+
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"], "state_bucket": ""}
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=AUG_RESERVATION, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+
+    strikes = [r["repeatCell"] for r in fake.requests
+               if r.get("repeatCell", {}).get("fields", "").find("strikethrough") >= 0]
+    fills = [r["repeatCell"] for r in fake.requests
+             if r.get("repeatCell", {}).get("fields", "") == "userEnteredFormat.backgroundColor"]
+
+    assert strikes, "nothing was struck through on a live run"
+    assert any(s["cell"]["userEnteredFormat"]["textFormat"]["strikethrough"] is True
+               for s in strikes), strikes
+    assert fills, "nothing was highlighted on a live run"
+    painted = [f for f in fills
+               if f["cell"]["userEnteredFormat"]["backgroundColor"] != sheets_client.NO_FILL_RGB]
+    assert painted, f"a fill was requested but it was the no-fill colour: {fills}"
+    print("OK: a live run really does paint strikethrough and highlight")
+
+
+def test_dry_run_paints_nothing():
+    """The other half of the same fact, and the reason the sheet looks unchanged:
+    a dry run computes the marks and deliberately writes none of them."""
+    class MarkingSS(FakeSS):
+        def __init__(self, wss):
+            super().__init__(wss)
+            self.requests = []
+
+        def batch_update(self, body):
+            self.requests.extend(body["requests"])
+
+        def fetch_sheet_metadata(self, params=None):
+            return {"sheets": [{"data": [{"rowData": []}]}]}
+
+    ago = FakeWS("Agosto 2026", [HEADER,
+                                 _row("New Orleans", "Thursday", "2026-08-06",
+                                      "HA-DEAD", "Ghost", "FALSE", "3223 Canal",
+                                      "11:00 AM", "", "", "")])
+    fake = MarkingSS([ago])
+    ago.spreadsheet = fake
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"], "state_bucket": ""}
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=True, reservations=AUG_RESERVATION, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+
+    assert ago.updated is None, "a dry run wrote values"
+    assert not fake.requests, f"a dry run painted marks: {fake.requests}"
+    print("OK: a dry run paints nothing -- which is why the sheet looks untouched")
+
+
 def test_skipped_tab_is_reported_in_the_step_summary():
     """A skipped tab writes no per-tab report, so the grand-total warning is the ONLY
     place its month shows up. Silence there reads as 'nothing to sync' -- the bug."""
@@ -391,6 +475,8 @@ if __name__ == "__main__":
     test_shifted_tab_repair_clears_and_rebuilds()
     test_grid_grows_to_fit_and_new_rows_get_checkboxes()
     test_grid_untouched_when_it_already_fits()
+    test_live_run_actually_paints_strikethrough_and_highlight()
+    test_dry_run_paints_nothing()
     test_skipped_tab_is_reported_in_the_step_summary()
     test_repaired_tab_is_not_reported_as_skipped()
 

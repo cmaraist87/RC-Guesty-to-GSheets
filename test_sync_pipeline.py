@@ -456,7 +456,7 @@ def test_city_filter_keeps_only_covered_markets():
         dict(CANDIDATE, Property="2407 Hyde A", City="Boston"),
         dict(CANDIDATE, Property="Website TEST", City=""),               # unknown scope
     ])
-    kept = sync.filter_to_cities(cands, sync.DEFAULT_CITIES)
+    kept, removed = sync.filter_to_cities(cands, sync.DEFAULT_CITIES)
 
     assert list(kept["Property"]) == ["1022 Mandeville", "6 Lake", "315 Main 1 A"], \
         list(kept["Property"])
@@ -465,7 +465,55 @@ def test_city_filter_keeps_only_covered_markets():
     assert kept.iloc[2]["City"] == "bay saint louis"
     # A blank city is dropped, not assumed in scope.
     assert "Website TEST" not in set(kept["Property"])
+    # ...and it reports WHAT it dropped and why, which the merge needs to tell an
+    # out-of-scope row from a cancelled one.
+    from processing import _canonical_key
+    assert removed[_canonical_key("8249 E Chaparral")] == "Scottsdale", removed
+    assert removed[_canonical_key("2407 Hyde A")] == "Boston", removed
+    assert removed[_canonical_key("Website TEST")] == "unknown city", removed
+    assert _canonical_key("1022 Mandeville") not in removed, removed
     print("OK: city filter keeps the 5 covered markets, drops the rest and blanks")
+
+
+def test_dropped_property_is_out_of_scope_not_cancelled():
+    """The live regression. Rows for a dropped market were written before the City
+    lookup worked, so their City cell is blank AND property_to_city.csv has never
+    heard of them -- both fallbacks silent. They were struck as CANCELLED, telling
+    the team a job was called off when it was never this sheet's work: 157
+    "cancellations" on a tab that had 37 real ones."""
+    from processing import _canonical_key
+
+    existing = pd.DataFrame([
+        # Blank City, unknown to the CSV, and out of scope: the exact failing shape.
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMBOS00001",
+                "Property": "12 Hinckley 1", "City": ""}),
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMSTOWE001",
+                "Property": "56 Turner Mill 1", "City": ""}),
+        # In scope, genuinely gone -> a real cancellation, must still be struck.
+        _row(**{"Date": "2026-11-01", "Confirmation Code": "HMGONE0001",
+                "Property": "6 Lake", "City": "Savannah"}),
+    ], columns=LIVE_HEADER).astype(str)
+
+    dropped = {_canonical_key("12 Hinckley 1"): "Boston",
+               _canonical_key("56 Turner Mill 1"): "Stowe"}
+
+    _, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([CANDIDATE]), existing,
+        cancel_window=("2026-10-01", "2026-12-31"),
+        allowed_cities=frozenset(["New Orleans", "Savannah", "Austin"]),
+        out_of_scope_properties=dropped)
+
+    assert stats["out_of_scope"] == 2, stats
+    assert stats["cancelled"] == 1, stats
+    assert [r["Confirmation Code"] for r in changes["cancelled"]] == ["HMGONE0001"]
+    cities = {r["Property"]: r["City"] for r in changes["out_of_scope"]}
+    assert cities == {"12 Hinckley 1": "Boston", "56 Turner Mill 1": "Stowe"}, cities
+    # Out-of-scope rows carry no mark at all -- not struck, not highlighted.
+    for prop in ("12 Hinckley 1", "56 Turner Mill 1"):
+        at = changes["kept_positions"].index(
+            [i for i, p in enumerate(existing["Property"]) if p == prop][0])
+        assert changes["row_flags"][at] == "", (prop, changes["row_flags"])
+    print("OK: a dropped market is reported out of scope, never struck as cancelled")
 
 
 def test_out_of_scope_rows_are_not_struck_as_cancelled():
@@ -669,6 +717,7 @@ if __name__ == "__main__":
     test_operator_column_carries_from_a_duplicate_row()
     test_city_filter_keeps_only_covered_markets()
     test_out_of_scope_rows_are_not_struck_as_cancelled()
+    test_dropped_property_is_out_of_scope_not_cancelled()
     test_blank_city_is_unknown_not_out_of_scope()
     test_upstream_city_survives_the_merge()
     test_duplicate_rows_do_not_lose_a_tick()
