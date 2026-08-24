@@ -314,6 +314,7 @@ class SharedTokenCache:
         self._sleep = sleep or time.sleep
         # Injectable so tests can prove "exactly one mint" without spending quota.
         self._mint = minter or mint_token
+        self._last_expiry = 0.0
         self.lock = lock or LeaseLock(
             store, name=TOKEN_LOCK_OBJECT, ttl=lease_ttl, poll=1.0,
             holder="guesty-token-refresh", clock=self._clock, sleep=self._sleep)
@@ -338,7 +339,21 @@ class SharedTokenCache:
 
     def _live_token(self) -> str:
         token, expires_at, _ = self._read()
-        return token if (token and _is_live(expires_at, self._clock)) else ""
+        if token and _is_live(expires_at, self._clock):
+            self._last_expiry = expires_at
+            return token
+        return ""
+
+    def _hours_left(self, expires_at) -> str:
+        return f"{(float(expires_at) - self._clock()) / 3600:.1f}h"
+
+    def _log(self, outcome: str, detail: str = "") -> None:
+        """One line per run, prefixed so it can be grepped out of a CI log.
+
+        Every path says whether quota was spent, because that is the question
+        anyone reads these logs to answer.
+        """
+        print(f"Guesty token: {outcome}" + (f" ({detail})" if detail else ""))
 
     def _store_token(self, token: str, expires_at: float, generation: int) -> None:
         body = json.dumps({"access_token": token,
@@ -356,7 +371,8 @@ class SharedTokenCache:
     def _fallback(self, client_id, client_secret, may_mint, why) -> str:
         token, expires_at = read_local_token(self.cache_path)
         if token and _is_live(expires_at, self._clock):
-            print(f"   (shared token cache unreachable: {why}; using the local cache)")
+            self._log("shared cache UNREACHABLE, fell back to this machine's "
+                      "local token, no request spent", why)
             return token
         if not may_mint:
             raise GuestyError(
@@ -364,7 +380,8 @@ class SharedTokenCache:
                 "This caller may not mint one -- several instances doing so would "
                 "exhaust the daily quota and break the scheduled sync. Failing this "
                 "attempt instead; it is safe to retry once the cache is reachable.")
-        print(f"   (shared token cache unreachable: {why}; minting a token locally)")
+        self._log("shared cache UNREACHABLE and no local token, MINTED one -- "
+                  "one of the daily quota spent", why)
         token, expires_at = self._mint(client_id, client_secret, self.session)
         write_local_token(self.cache_path, token, expires_at)
         return token
@@ -377,6 +394,8 @@ class SharedTokenCache:
         try:
             token = self._live_token()
             if token:
+                self._log("REUSED from the shared cache, no request spent",
+                          f"expires in {self._hours_left(self._last_expiry)}")
                 return token
         except StoreUnavailable as e:
             return self._fallback(client_id, client_secret, may_mint, str(e))
@@ -393,6 +412,8 @@ class SharedTokenCache:
                 except StoreUnavailable as e:
                     return self._fallback(client_id, client_secret, may_mint, str(e))
                 if token:
+                    self._log("picked up a refresh made by another runtime "
+                              "while waiting, no request spent")
                     return token
             raise GuestyError(
                 "No valid Guesty token in the shared cache and this caller may not "
@@ -407,6 +428,8 @@ class SharedTokenCache:
                 # this whole mechanism exists to protect.
                 token, expires_at, generation = self._read()
                 if token and _is_live(expires_at, self._clock):
+                    self._log("another runtime refreshed it while we held the "
+                              "queue, no request spent")
                     return token
                 # Before spending quota, check whether this machine already holds a
                 # live token. On the very first run the shared object is empty while
@@ -414,10 +437,14 @@ class SharedTokenCache:
                 # minting there would waste a request purely because the cache is new.
                 local, local_exp = read_local_token(self.cache_path)
                 if local and _is_live(local_exp, self._clock):
-                    print("   (seeding the shared token cache from the local one)")
+                    self._log("SEEDED the shared cache from this machine's local "
+                              "token, no request spent",
+                              f"expires in {self._hours_left(local_exp)}")
                     self._store_token(local, local_exp, generation)
                     return local
                 token, expires_at = self._mint(client_id, client_secret, self.session)
+                self._log("MINTED a new token -- one of the daily quota spent",
+                          f"valid for {self._hours_left(expires_at)}")
                 self._store_token(token, expires_at, generation)
                 write_local_token(self.cache_path, token, expires_at)
                 return token
@@ -428,6 +455,8 @@ class SharedTokenCache:
             except StoreUnavailable as e:
                 return self._fallback(client_id, client_secret, may_mint, str(e))
             if token:
+                self._log("another runtime refreshed it while we waited for the "
+                          "lease, no request spent")
                 return token
             raise GuestyError(
                 "Timed out waiting for another caller to refresh the Guesty token, "

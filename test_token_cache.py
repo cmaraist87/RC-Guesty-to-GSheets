@@ -296,6 +296,47 @@ def test_empty_shared_cache_seeds_from_a_live_local_token():
     print("OK: an empty shared cache is seeded from a live local token, not a mint")
 
 
+def test_every_path_logs_whether_quota_was_spent():
+    """An Actions log must answer "did this run spend a token request?" without
+    anyone opening the bucket. Every outcome says so in one greppable line."""
+    import io
+    from contextlib import redirect_stdout
+
+    def line_for(fn):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fn()
+        out = [l for l in buf.getvalue().splitlines() if l.startswith("Guesty token:")]
+        assert len(out) == 1, f"expected exactly one line, got {out}"
+        return out[0]
+
+    store = InMemoryObjectStore()
+    minter = CountingMinter()
+    c = SharedTokenCache(store, cache_path=None, minter=minter)
+
+    minted = line_for(lambda: c.get("i", "s"))
+    assert "MINTED" in minted and "quota spent" in minted, minted
+
+    reused = line_for(lambda: c.get("i", "s"))
+    assert "REUSED" in reused and "no request spent" in reused, reused
+
+    path = _tmp_cache()
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"access_token": "local", "expires_at": _now() + 9_999}, fh)
+        seeded = line_for(lambda: SharedTokenCache(
+            InMemoryObjectStore(), cache_path=path, minter=CountingMinter()).get("i", "s"))
+        assert "SEEDED" in seeded and "no request spent" in seeded, seeded
+
+        fell_back = line_for(lambda: SharedTokenCache(
+            BrokenStore(), cache_path=path, minter=CountingMinter()).get("i", "s"))
+        assert "UNREACHABLE" in fell_back and "no request spent" in fell_back, fell_back
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+    print("OK: every token path logs one line saying whether quota was spent")
+
+
 def test_sync_falls_back_when_no_bucket_is_configured():
     """STATE_BUCKET unset must keep the old single-process behaviour rather than
     failing -- that is the escape hatch if the bucket is ever unavailable."""
@@ -328,5 +369,6 @@ if __name__ == "__main__":
     test_store_unavailable_is_distinct_from_a_refusal()
     test_lease_holder_that_dies_does_not_wedge_the_cache()
     test_empty_shared_cache_seeds_from_a_live_local_token()
+    test_every_path_logs_whether_quota_was_spent()
     test_sync_falls_back_when_no_bucket_is_configured()
     print("\nALL TOKEN-CACHE TESTS PASSED")
