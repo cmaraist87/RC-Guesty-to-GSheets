@@ -370,13 +370,23 @@ def test_grid_grows_to_fit_and_new_rows_get_checkboxes():
     assert dv, "the new rows must get the checkbox rule"
     for r in dv:
         assert r["rule"]["condition"]["type"] == "BOOLEAN", r
-        # Only the rows that did not exist before, never the existing ones.
-        assert r["range"]["startRowIndex"] == 10, r
-        assert r["range"]["endRowIndex"] == 26, r
+        # Never the header, and never past the data.
+        assert r["range"]["startRowIndex"] >= 1, r
+        assert r["range"]["endRowIndex"] <= 26, r
+
+    # The rule now covers EVERY data row, not only the ones just added. A rebuilt
+    # tab has values but no rule, so applying it only to appended rows left the
+    # rest showing the literal text FALSE.
+    rows_covered = set()
+    for r in dv:
+        rows_covered |= set(range(r["range"]["startRowIndex"], r["range"]["endRowIndex"]))
+    assert rows_covered == set(range(1, 26)), sorted(rows_covered)[:5]
+
     covered = {c for r in dv
                for c in range(r["range"]["startColumnIndex"], r["range"]["endColumnIndex"])}
     assert covered == {5, 7, 9, 11}, covered
-    print("OK: grid grown to fit, checkbox validation extended over the new rows")
+    assert marks["checkbox_cols"] == 4, marks
+    print("OK: grid grown to fit, tickbox rule applied across every data row")
 
 
 def test_grid_untouched_when_it_already_fits():

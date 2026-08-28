@@ -372,17 +372,35 @@ def ensure_grid(ws, n_rows: int, n_cols: int, checkbox_cols=()) -> int:
 
     added = n_rows - have_rows
     ws.add_rows(added)
-    requests = [
+    apply_checkbox_validation(ws, checkbox_cols, have_rows, n_rows)
+    return added
+
+
+def apply_checkbox_validation(ws, columns, first_row: int, last_row: int) -> int:
+    """Put the tickbox rule on `columns` over data rows [first_row, last_row).
+
+    Rows are 0-based grid rows, so row 1 is the first data row.
+
+    Writing TRUE/FALSE only gets you a tickbox if the cell carries BOOLEAN data
+    validation. The sync deliberately writes values and not formatting, which is
+    what protects your column widths and borders -- but it also means a tab that
+    never had the rule shows the literal text FALSE forever. Rebuilt tabs land in
+    exactly that state, so the rule is (re)applied on every write. setDataValidation
+    is idempotent, so a tab that already has it is unaffected.
+    """
+    runs = _runs(sorted(columns))
+    if not runs or last_row <= first_row:
+        return 0
+    _apply_requests(ws, [
         {"setDataValidation": {
             "range": {"sheetId": ws.id,
-                      "startRowIndex": have_rows, "endRowIndex": n_rows,
+                      "startRowIndex": first_row, "endRowIndex": last_row,
                       "startColumnIndex": a, "endColumnIndex": b + 1},
             "rule": {"condition": {"type": "BOOLEAN"},
                      "strict": True, "showCustomUi": True}}}
-        for a, b in _runs(sorted(checkbox_cols))
-    ]
-    _apply_requests(ws, requests)
-    return added
+        for a, b in runs
+    ])
+    return sum(b - a + 1 for a, b in runs)
 
 
 def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
@@ -403,6 +421,9 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
     n_cols = max(len(header_raw), full.shape[1])
 
     grew = ensure_grid(ws, new_row_count, n_cols, checkbox_cols)
+    # Every data row, not just any that were added: a rebuilt tab has values but
+    # no rule, which is why TRUE/FALSE was showing as text instead of a tickbox.
+    boxed = apply_checkbox_validation(ws, checkbox_cols, 1, new_row_count)
 
     ws.update(
         range_name="A1",
@@ -415,10 +436,11 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
         ws.batch_clear([f"A{new_row_count + 1}:{_col_letter(n_cols)}{prev_row_count}"])
 
     if row_flags is None:
-        return {"rows_added": grew}
+        return {"rows_added": grew, "checkbox_cols": boxed}
     marks = apply_row_marks(ws, row_flags, was_highlighted or set(), n_cols,
                             clear_from=max(prev_row_count - 1, len(row_flags)))
     marks["rows_added"] = grew
+    marks["checkbox_cols"] = boxed
     return marks
 
 

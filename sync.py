@@ -508,6 +508,17 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         # Which columns really are checkboxes, per the tab's own data-validation.
         # Empty (unreadable tab, or none defined) -> merge falls back to guessing.
         cb_idx = read_checkbox_columns(ws)
+        if not cb_idx:
+            # The tab carries no tickbox rule at all -- which is the state a
+            # rebuilt tab is left in, and why TRUE/FALSE showed as text. Fall back
+            # to the header names so the write can put the rule ON rather than
+            # silently producing a column of words.
+            from sheet_merge import _is_checkbox_header
+            cb_idx = {j for j, c in enumerate(sheet_df.columns)
+                      if _is_checkbox_header(c)}
+            if cb_idx:
+                print(f"   ('{ws.title}' has no checkbox rule; identified "
+                      f"{len(cb_idx)} checkbox column(s) by header name)")
         cb_cols = frozenset(sheet_df.columns[j] for j in cb_idx
                             if j < len(sheet_df.columns))
         try:
@@ -571,8 +582,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                      f"cleared {marks.get('unhighlighted', 0)} old highlight(s))."
                      if marks else "."))
             if marks.get("rows_added"):
-                print(f"      grew the tab by {marks['rows_added']} row(s) to fit, "
-                      "with checkbox validation extended over them.")
+                print(f"      grew the tab by {marks['rows_added']} row(s) to fit.")
+            if marks.get("checkbox_cols"):
+                print(f"      applied the tickbox rule to "
+                      f"{marks['checkbox_cols']} checkbox column(s).")
 
     if snapshots:
         pd.concat(snapshots, ignore_index=True).to_csv(OUTPUT_CSV, index=False)
