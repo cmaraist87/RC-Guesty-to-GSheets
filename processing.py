@@ -39,6 +39,11 @@ EXCLUDE_PROPERTIES = {
     "522 Harris",
     "524 E Jones",
     "710 Barnard",
+    # Test/demo listings. Guesty gives these a real in-scope city, so the city
+    # filter cannot catch them and they arrive looking like genuine bookings --
+    # "Website TEST" reached the Septiembre rebuild as a cleaning job.
+    "Website TEST",
+    "TEST-1209 MagazineSB",
 }
 
 # The source listing names spell the same *unit* many different ways — inconsistent

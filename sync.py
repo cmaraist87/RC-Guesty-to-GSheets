@@ -555,6 +555,12 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 validated_checkboxes=cb_cols or None,
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
                 out_of_scope_properties=out_of_scope_props)
+            # A rebuild writes every row, so every row is technically "new" and the
+            # whole month comes out amber. That is true and useless: the highlight
+            # means "look here, this changed today", and a thousand of them trains
+            # people to ignore it. Write the rebuilt month unmarked, so the next
+            # ordinary run produces the first meaningful diff.
+            changes["row_flags"] = [""] * len(changes["row_flags"])
         except ValueError as e:
             print(f"\n!! Tab '{ws.title}': SKIPPED (not a reservations layout) -- {e}")
             layout_skipped.append({"title": ws.title, "ym": ym, "rows": len(cand),

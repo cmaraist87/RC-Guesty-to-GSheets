@@ -219,6 +219,45 @@ def _summary_of(run) -> str:
         os.unlink(path)
 
 
+def test_repaired_tab_is_written_without_a_blanket_highlight():
+    """A rebuild writes every row, so every row is "new" and the month comes out
+    entirely amber -- true, and useless: the highlight means "this changed today",
+    and a thousand of them trains people to ignore it."""
+    class MarkingSS(FakeSS):
+        def __init__(self, wss):
+            super().__init__(wss)
+            self.requests = []
+
+        def batch_update(self, body):
+            self.requests.extend(body["requests"])
+
+        def fetch_sheet_metadata(self, params=None):
+            return {"sheets": [{"data": [{"rowData": []}]}]}
+
+    ago = FakeWS("Agosto 2026", [HEADER, list(SHIFTED_ROW), list(SHIFTED_ROW)])
+    fake = MarkingSS([ago])
+    ago.spreadsheet = fake
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 1, "lookahead": 180,
+           "statuses": ["confirmed"], "repair_shifted": True, "state_bucket": ""}
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=AUG_RESERVATION, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+
+    assert ago.updated is not None, "the repaired tab should have been rewritten"
+    fills = [r["repeatCell"] for r in fake.requests
+             if r.get("repeatCell", {}).get("fields", "") == "userEnteredFormat.backgroundColor"]
+    painted = [f for f in fills
+               if f["cell"]["userEnteredFormat"]["backgroundColor"] != sheets_client.NO_FILL_RGB]
+    assert not painted, f"a rebuilt month was highlighted: {painted}"
+    # The tickbox rule still goes on, though -- that is the whole point of a repair.
+    assert any("setDataValidation" in r for r in fake.requests), fake.requests
+    print("OK: a rebuilt month is written unmarked, but still gets the tickbox rule")
+
+
 def test_live_run_actually_paints_strikethrough_and_highlight():
     """End to end on a LIVE run: a cancelled row must come out struck and a new row
     highlighted. Every run so far has been a dry run, which paints nothing by
@@ -485,6 +524,7 @@ if __name__ == "__main__":
     test_shifted_tab_repair_clears_and_rebuilds()
     test_grid_grows_to_fit_and_new_rows_get_checkboxes()
     test_grid_untouched_when_it_already_fits()
+    test_repaired_tab_is_written_without_a_blanket_highlight()
     test_live_run_actually_paints_strikethrough_and_highlight()
     test_dry_run_paints_nothing()
     test_skipped_tab_is_reported_in_the_step_summary()
