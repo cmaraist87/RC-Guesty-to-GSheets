@@ -23,6 +23,10 @@ on:
         description: "One-off repair: IGNORE the strikethrough on each tab and re-derive every cancellation from Guesty"
         type: boolean
         default: false
+      lookback_days:
+        description: "Days of history to fetch (blank = the usual 1). Raise it for a strike repair, or cancellations older than this lose their line."
+        type: string
+        default: ""
 
 concurrency:
   group: guesty-sheet-sync
@@ -73,7 +77,7 @@ jobs:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
           TEMPLATE_TAB: ${{ vars.TEMPLATE_TAB }}
-          SYNC_LOOKBACK_DAYS: ${{ vars.SYNC_LOOKBACK_DAYS }}
+          SYNC_LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || vars.SYNC_LOOKBACK_DAYS }}
           SYNC_LOOKAHEAD_DAYS: ${{ vars.SYNC_LOOKAHEAD_DAYS }}
           SYNC_STATUSES: ${{ vars.SYNC_STATUSES }}
           SYNC_MARK_CANCELLED: ${{ vars.SYNC_MARK_CANCELLED }}
