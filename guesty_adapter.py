@@ -45,6 +45,12 @@ FIELD_MAP: dict[str, list[str]] = {
     "listing_id":  ["listing._id", "listingId._id", "listingId", "listing.id"],
     "guest":       ["guest.fullName", "guest.firstName", "guestId.fullName"],
     "conf_code":   ["confirmationCode", "reservationId", "_id"],
+    # The reservation's own STABLE identity, as distinct from `conf_code`, which is
+    # the BOOKING CHANNEL's reference. Whether a channel keeps its code across an
+    # edit (a guest moving a checkout date) is the channel's policy, not Guesty's,
+    # so it is the wrong thing to key rows on. `_id` is Guesty's and never changes.
+    # Already arriving in every payload -- it was simply being discarded.
+    "res_id":      ["_id", "reservationId"],
     "city":        ["listing.address.city", "listingId.address.city", "listing.city"],
     # Localized (listing-timezone) check-in / check-out. May be date-only
     # ("2026-06-19") or a full local datetime; both are handled below.
@@ -58,9 +64,11 @@ FIELD_MAP: dict[str, list[str]] = {
 # LISTING ID is appended, so the manual CSV exports (which have no such column)
 # still line up positionally and every existing consumer is unaffected.
 CHECKOUT_COLUMNS = ["LISTING", "CHECK-OUT DATE", "CHECK-OUT TIME",
-                    "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID"]
+                    "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID",
+                    "RESERVATION ID"]
 CHECKIN_COLUMNS = ["LISTING", "CHECK-IN DATE", "CHECK-IN TIME",
-                   "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID"]
+                   "CONFIRMATION CODE", "GUEST", "LISTING'S CITY", "LISTING ID",
+                   "RESERVATION ID"]
 
 
 def _as_id(value) -> str:
@@ -168,6 +176,7 @@ def reservations_to_frames(reservations: list[dict]) -> tuple[pd.DataFrame, pd.D
         conf = _first(res, FIELD_MAP["conf_code"])
         city = _first(res, FIELD_MAP["city"])
         listing_id = _as_id(_first(res, FIELD_MAP["listing_id"]))
+        res_id = _as_id(_first(res, FIELD_MAP["res_id"]))
         if not listing:
             continue  # can't place a reservation without a listing name
 
@@ -186,13 +195,13 @@ def reservations_to_frames(reservations: list[dict]) -> tuple[pd.DataFrame, pd.D
             co_rows.append({
                 "LISTING": listing, "CHECK-OUT DATE": co_date, "CHECK-OUT TIME": co_time,
                 "CONFIRMATION CODE": conf, "GUEST": guest, "LISTING'S CITY": city,
-                "LISTING ID": listing_id,
+                "LISTING ID": listing_id, "RESERVATION ID": res_id,
             })
         if ci_date:
             ci_rows.append({
                 "LISTING": listing, "CHECK-IN DATE": ci_date, "CHECK-IN TIME": ci_time,
                 "CONFIRMATION CODE": conf, "GUEST": guest, "LISTING'S CITY": city,
-                "LISTING ID": listing_id,
+                "LISTING ID": listing_id, "RESERVATION ID": res_id,
             })
 
     df_co = pd.DataFrame(co_rows, columns=CHECKOUT_COLUMNS)

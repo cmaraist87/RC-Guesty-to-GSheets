@@ -202,6 +202,36 @@ def guesty_token(cfg: dict) -> str:
                                        may_mint=True)
 
 
+def record_reservation_snapshot(reservations: list[dict], cfg: dict,
+                                dry_run: bool = False) -> dict:
+    """Fingerprint tonight's reservations, report what moved since last night, store it.
+
+    Costs no API call and no token quota -- every field comes from the fetch that has
+    already happened. Its job is to answer, from real data, whether an edited
+    reservation keeps its confirmation code, which decides what the sheet may safely
+    key rows on. It is also a standing audit trail of what changed each night.
+
+    Never fails the sync: an unreachable bucket degrades to "no diff this run".
+    A dry run reports the diff but does not advance the stored baseline, so a dry run
+    cannot consume the comparison a later live run was going to make.
+    """
+    from reservation_snapshot import diff, fingerprint, format_report, load, save
+
+    store = state_store(cfg)
+    before, generation, taken_at = load(store)
+    after = fingerprint(reservations)
+    # Tonight's coverage, so a reservation that merely aged out of the sliding
+    # fetch window is not announced as a cancellation.
+    d = diff(before, after, window=coverage_window(cfg))
+    print()
+    print(format_report(d, taken_at=taken_at))
+    if dry_run:
+        print("   (dry run: baseline left as it was)")
+    elif not save(store, after, generation):
+        print("   (snapshot not stored; tomorrow will compare against an older run)")
+    return d
+
+
 def fetch_from_guesty(cfg: dict) -> list[dict]:
     from guesty_client import fetch_reservations
     token = guesty_token(cfg)
@@ -864,6 +894,11 @@ def main(argv=None) -> int:
         reservations = fetch_from_guesty(cfg)
 
     describe_first(reservations)
+    if not args.from_json:
+        # Only ever snapshot a real full fetch. A --from-json payload is a partial,
+        # possibly stale dataset: diffing it would invent cancellations, and storing
+        # it would destroy the baseline the next live run needs.
+        record_reservation_snapshot(reservations, cfg, dry_run=args.dry_run)
     return run(args.dry_run, reservations, cfg)
 
 

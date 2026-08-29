@@ -338,8 +338,11 @@ def test_listing_id_is_carried_through_the_adapter():
     ])
     assert "LISTING ID" in co.columns and "LISTING ID" in ci.columns
     assert list(co["LISTING ID"]) == ["LID-abc", "LID-bare"], co.to_string()
-    # Appended last, so the manual CSV exports still line up positionally.
-    assert co.columns[-1] == "LISTING ID"
+    # Both ids are APPENDED, so the manual CSV exports still line up positionally:
+    # the first six columns are exactly what those exports carry.
+    assert list(co.columns[:6]) == ["LISTING", "CHECK-OUT DATE", "CHECK-OUT TIME",
+                                    "CONFIRMATION CODE", "GUEST", "LISTING'S CITY"]
+    assert list(co.columns[6:]) == ["LISTING ID", "RESERVATION ID"], list(co.columns)
     # A payload with no id at all degrades to blank rather than failing.
     co2, _ = reservations_to_frames([{
         "confirmationCode": "HM3", "guest": {"fullName": "I"},
@@ -347,6 +350,39 @@ def test_listing_id_is_carried_through_the_adapter():
         "checkInDateLocalized": "2026-08-11", "checkOutDateLocalized": "2026-08-15"}])
     assert list(co2["LISTING ID"]) == [""], co2.to_string()
     print("OK: listing id is captured from both payload shapes, blank when absent")
+
+
+def test_reservation_id_is_carried_through_the_adapter():
+    """The reservation's own id, which is what rows will eventually be keyed on.
+
+    Distinct from the confirmation code: that comes from the booking channel, and
+    whether it survives a guest editing their dates is the channel's policy, not
+    Guesty's. `_id` is Guesty's own and does not change.
+    """
+    co, ci = reservations_to_frames([
+        {"_id": "res_abc", "confirmationCode": "HM1", "guest": {"fullName": "J"},
+         "listing": {"nickname": "6 Lake", "address": {"city": "Savannah"}},
+         "checkInDateLocalized": "2026-08-11", "checkOutDateLocalized": "2026-08-15"},
+    ])
+    assert list(co["RESERVATION ID"]) == ["res_abc"], co.to_string()
+    assert list(ci["RESERVATION ID"]) == ["res_abc"], ci.to_string()
+    # The check-out and check-in rows of one booking share the id -- that is what
+    # lets a date change update a row instead of striking it and adding another.
+    assert co["RESERVATION ID"][0] == ci["RESERVATION ID"][0]
+    # It is requested from the API, not merely read if it happens to arrive.
+    assert "_id" in requested_fields().split()
+    # Falls back to reservationId, and degrades to blank rather than failing.
+    alt, _ = reservations_to_frames([
+        {"reservationId": "res_xyz", "confirmationCode": "HM2", "guest": {"fullName": "K"},
+         "listing": {"nickname": "6 Lake"},
+         "checkInDateLocalized": "2026-08-11", "checkOutDateLocalized": "2026-08-15"}])
+    assert list(alt["RESERVATION ID"]) == ["res_xyz"], alt.to_string()
+    none, _ = reservations_to_frames([
+        {"confirmationCode": "HM3", "guest": {"fullName": "L"},
+         "listing": {"nickname": "6 Lake"},
+         "checkInDateLocalized": "2026-08-11", "checkOutDateLocalized": "2026-08-15"}])
+    assert list(none["RESERVATION ID"]) == [""], none.to_string()
+    print("OK: reservation id captured on both rows of a booking, blank when absent")
 
 
 def test_turnover_row_keeps_both_confirmation_codes():
@@ -712,6 +748,7 @@ if __name__ == "__main__":
     test_moves_alone_never_trip_the_guard()
     test_billing_listings_never_become_properties()
     test_listing_id_is_carried_through_the_adapter()
+    test_reservation_id_is_carried_through_the_adapter()
     test_turnover_row_keeps_both_confirmation_codes()
     test_operator_columns_survive_a_rewrite()
     test_operator_column_carries_from_a_duplicate_row()
