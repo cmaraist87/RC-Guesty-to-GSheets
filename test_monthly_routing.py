@@ -399,7 +399,8 @@ def test_grid_grows_to_fit_and_new_rows_get_checkboxes():
                                            "", "", "", ""])) for i in range(25)],
                         columns=HEADER)
     marks = sc.write_dataframe(ws, full, HEADER, row_flags=["new"] * 25,
-                               was_highlighted=set(), checkbox_cols={5, 7, 9, 11})
+                               prior_highlight=set(), prior_struck=set(),
+                               checkbox_cols={5, 7, 9, 11})
 
     assert ws.added == 16, ws.added            # 10 -> 26
     assert marks["rows_added"] == 16, marks
@@ -446,7 +447,8 @@ def test_grid_untouched_when_it_already_fits():
                                            "11:00 AM", "FALSE", "", "FALSE",
                                            "", "", "", ""]))], columns=HEADER)
     marks = sc.write_dataframe(ws, full, HEADER, row_flags=["new"],
-                               was_highlighted=set(), checkbox_cols={5, 7, 9, 11})
+                               prior_highlight=set(), prior_struck=set(),
+                               checkbox_cols={5, 7, 9, 11})
     assert ws.added == 0 and marks["rows_added"] == 0, (ws.added, marks)
     print("OK: a tab with room to spare is not resized")
 
@@ -490,17 +492,18 @@ def test_read_row_marks():
 def test_apply_row_marks_requests():
     ws = FakeWS("Noviembre 2026", [HEADER])
     ws.spreadsheet = RecordingSS()
-    # rows 0-1 carry yesterday's highlight; row 1 is still new today, row 0 isn't.
+    # Grid state before the write: rows 0-1 wear our amber, row 4 wears a line.
     flags = ["", "new", "cancelled", "cancelled", "struck", "new"]
-    marks = sheets_client.apply_row_marks(ws, flags, was_highlighted={0, 1},
-                                          n_cols=len(HEADER))
-    assert marks == {"struck": 2, "highlighted": 1, "unhighlighted": 1}, marks
+    marks = sheets_client.apply_row_marks(ws, flags, prior_highlight={0, 1},
+                                          prior_struck={4}, n_cols=len(HEADER))
+    assert marks == {"struck": 2, "unstruck": 0, "struck_total": 3,
+                     "highlighted": 1, "unhighlighted": 1}, marks
 
     got = [(r["repeatCell"]["fields"],
             r["repeatCell"]["range"]["startRowIndex"],
             r["repeatCell"]["range"]["endRowIndex"])
            for r in ws.spreadsheet.requests]
-    # Rows 2-3 strike as ONE request (contiguous); row 4 was already struck -> skipped.
+    # Rows 2-3 strike as ONE request (contiguous); row 4 already has its line.
     assert ("userEnteredFormat.textFormat.strikethrough", 3, 5) in got, got
     # Row 5 is newly highlighted; row 1 already was, so it isn't repainted.
     assert ("userEnteredFormat.backgroundColor", 6, 7) in got, got
@@ -514,11 +517,197 @@ def test_apply_row_marks_requests():
     print("OK apply_row_marks: contiguous runs, no redundant repaints, formatting scoped")
 
 
+def test_apply_row_marks_reasserts_moved_strike():
+    """A struck row that slid to a new position gets its line re-asserted there,
+    and the live row that inherited the old line has it lifted.
+
+    This is the bug that made month-end cancellation counts untrustworthy: the line
+    was painted on a grid position and never moved with its reservation.
+    """
+    ws = FakeWS("Noviembre 2026", [HEADER])
+    ws.spreadsheet = RecordingSS()
+    # Yesterday the cancelled row sat at index 1. An update above it deleted a row,
+    # so today it is at index 0 -- but the grid still has the line on index 1.
+    flags = ["struck", "", "", "updated"]
+    marks = sheets_client.apply_row_marks(ws, flags, prior_highlight=set(),
+                                          prior_struck={1}, n_cols=len(HEADER))
+    assert marks["struck"] == 1 and marks["unstruck"] == 1, marks
+    assert marks["struck_total"] == 1, marks
+
+    strikes = {(r["repeatCell"]["range"]["startRowIndex"],
+                r["repeatCell"]["cell"]["userEnteredFormat"]["textFormat"]["strikethrough"])
+               for r in ws.spreadsheet.requests
+               if "strikethrough" in r["repeatCell"]["fields"]}
+    assert (1, True) in strikes, strikes     # grid row 2 (data row 0): the real one
+    assert (2, False) in strikes, strikes    # grid row 3 (data row 1): innocent, cleared
+    print("OK apply_row_marks: strike follows the reservation, not the grid position")
+
+
+def test_apply_row_marks_struck_rows_survive_indefinitely():
+    """A cancellation keeps its line every run, forever, wherever it ends up.
+
+    Simulates a row that is cancelled once and then carried for many runs while the
+    rows around it churn. The month-end count must stay exactly 1.
+    """
+    pos = 7                       # where the cancelled row currently sits
+    physical = set()              # what the grid actually shows
+    flags = [""] * 12
+    flags[pos] = "cancelled"
+    for run in range(30):
+        ws = FakeWS("Noviembre 2026", [HEADER])
+        ws.spreadsheet = RecordingSS()
+        marks = sheets_client.apply_row_marks(ws, flags, prior_highlight=set(),
+                                              prior_struck=set(physical),
+                                              n_cols=len(HEADER))
+        physical = {i for i, f in enumerate(flags) if f in sheets_client._STRIKE_FLAGS}
+        assert physical == {pos}, (run, physical, pos)
+        assert marks["struck_total"] == 1, (run, marks)
+        # Next run: rows above churn, the cancelled row slides up, stays "struck".
+        pos = max(0, pos - 1)
+        flags = [""] * 12
+        flags[pos] = "struck"
+    print("OK apply_row_marks: one cancellation stays exactly one struck row over 30 runs")
+
+
+# --- the strike-repair pass ------------------------------------------------------
+# The lines already on the live tabs were painted by GRID POSITION and slid onto the
+# wrong rows as rows shifted beneath them. A normal run would faithfully preserve
+# that: it reads the grid, believes it, and carries the error forward. SYNC_REPAIR_
+# STRIKES forgets the grid and re-derives every cancellation from Guesty instead.
+
+REPAIR_HEADER = ["City", "Day", "Date", "Confirmation Code", "Guest", "Property",
+                 "Check-out Time", "Check-in Time", "T/O", "Adjustments"]
+
+
+def _repair_row(code, prop, date):
+    return ["New Orleans", "Fri", date, code, "G " + code, prop,
+            "11:00 AM", "", "", ""]
+
+
+def _run_repair(repair: bool):
+    """One live booking and one genuinely-cancelled booking, with the strikethrough
+    sitting on the WRONG one -- exactly the state the live sheets are in.
+
+    The sheet is built from the pipeline's OWN output for the live booking, so it
+    matches cleanly and the only differences are the ones under test.
+    """
+    live = [{"confirmationCode": "C-LIVE", "status": "confirmed",
+             "guest": {"fullName": "G C-LIVE"},
+             "listing": {"nickname": "1201 N Roman",
+                         "address": {"city": "New Orleans"}},
+             "checkInDateLocalized": "2026-08-10",
+             "checkOutDateLocalized": "2026-08-14"}]
+    from guesty_adapter import reservations_to_frames
+    from processing import process_reservations
+    produced = process_reservations(*reservations_to_frames(live))
+    produced = produced.reindex(columns=REPAIR_HEADER).fillna("")
+    rows = [[str(v) for v in r] for r in produced.values.tolist()]
+    dead_at = len(rows)                       # the genuinely-cancelled row
+    rows.append(_repair_row("C-DEAD", "3223 Canal", "2026-08-15"))
+
+    ws = FakeWS("Agosto 2026", [REPAIR_HEADER] + [list(r) for r in rows])
+    # The grid claims data row 0 (a LIVE booking) is struck. It is not: the line slid
+    # onto it when a row above was superseded on some earlier run.
+    marks = [_cell()] * (len(rows) + 1)
+    marks[1] = _cell(strike=True)             # grid row 2 == data row 0
+    ws.spreadsheet = RecordingSS(row_marks=marks)
+    fake = FakeSS([ws])
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"], "repair_strikes": repair,
+           "cities": ("New Orleans",)}
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=live, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+
+    strikes = {}
+    for r in ws.spreadsheet.requests:
+        rc = r["repeatCell"]
+        if "strikethrough" not in rc["fields"]:
+            continue
+        on = rc["cell"]["userEnteredFormat"]["textFormat"]["strikethrough"]
+        for grid in range(rc["range"]["startRowIndex"], rc["range"]["endRowIndex"]):
+            strikes[grid - 1] = on            # grid row -> data row
+    written = (ws.updated or [])[1:]
+    props = [row[REPAIR_HEADER.index("Property")] for row in written]
+    return props, strikes, dead_at, len(rows)
+
+
+def test_without_the_flag_a_misplaced_strike_is_believed():
+    props, strikes, _, n_before = _run_repair(repair=False)
+    # The line is left exactly where it was, on a live booking.
+    assert strikes.get(0) is not False, (props, strikes)
+    # And it does damage: a struck row is excluded from matching, so tonight's
+    # fetch of that same booking has nothing to match and lands as a NEW row.
+    # This is the duplication that has been accumulating in the live sheets.
+    assert len(props) > n_before, ("the misplaced line should duplicate a booking",
+                                   props, n_before)
+    print("OK repair off: the misplaced line is believed and duplicates the booking")
+
+
+def test_repair_flag_re_derives_cancellations_from_guesty():
+    props, strikes, dead_at, n_before = _run_repair(repair=True)
+    assert strikes.get(0) is False, ("the live booking's line must be lifted",
+                                     props, strikes)
+    assert strikes.get(dead_at) is True, ("the real cancellation must be struck",
+                                          props, strikes)
+    # With the bogus line gone the booking matches again, so no duplicate appears.
+    assert len(props) == n_before, ("repair must not add rows", props, n_before)
+    print("OK repair on: line lifted off the live row, moved onto the real "
+          "cancellation, no duplicate")
+
+
+def test_repair_flag_survives_a_whole_month_of_cancellations():
+    """The guard that blocks a mass strike must not block the repair itself.
+
+    A repair run legitimately strikes every cancellation the month accumulated at
+    once -- which is precisely the shape the short-fetch guard exists to refuse.
+    """
+    rows = [_repair_row("C%d" % i, "Prop %d" % i, "2026-08-%02d" % (10 + i))
+            for i in range(20)]
+    ws = FakeWS("Agosto 2026", [REPAIR_HEADER] + rows)
+    ws.spreadsheet = RecordingSS(row_marks=[_cell()] * (len(rows) + 1))
+    fake = FakeSS([ws])
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"], "repair_strikes": True,
+           "cities": ("New Orleans",)}
+    # One surviving booking, so this is a real fetch with 20 cancellations in it --
+    # not an empty fetch, which the sync refuses outright for its own good reasons.
+    live = [{"confirmationCode": "C-LIVE", "status": "confirmed",
+             "guest": {"fullName": "G C-LIVE"},
+             "listing": {"nickname": "1201 N Roman",
+                         "address": {"city": "New Orleans"}},
+             "checkInDateLocalized": "2026-08-10",
+             "checkOutDateLocalized": "2026-08-14"}]
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=live, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+    struck = sum(rc["range"]["endRowIndex"] - rc["range"]["startRowIndex"]
+                 for r in ws.spreadsheet.requests
+                 for rc in [r["repeatCell"]]
+                 if "strikethrough" in rc["fields"]
+                 and rc["cell"]["userEnteredFormat"]["textFormat"]["strikethrough"])
+    assert struck == 20, ("every cancellation should be struck on a repair run", struck)
+    print("OK repair on: the mass-strike guard steps aside for a deliberate repair")
+
+
 if __name__ == "__main__":
     test_parse_titles()
     test_tab_cancel_window()
     test_read_row_marks()
     test_apply_row_marks_requests()
+    test_apply_row_marks_reasserts_moved_strike()
+    test_apply_row_marks_struck_rows_survive_indefinitely()
+    test_without_the_flag_a_misplaced_strike_is_believed()
+    test_repair_flag_re_derives_cancellations_from_guesty()
+    test_repair_flag_survives_a_whole_month_of_cancellations()
     test_shifted_tab_is_skipped_without_the_flag()
     test_shifted_tab_dry_run_does_not_clear()
     test_shifted_tab_repair_clears_and_rebuilds()

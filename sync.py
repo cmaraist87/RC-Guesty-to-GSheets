@@ -109,6 +109,11 @@ def load_config() -> dict:
                           not in ("0", "false", "no", "off"),
         "repair_shifted": _env("SYNC_REPAIR_SHIFTED_TABS", "0").lower()
                           in ("1", "true", "yes", "on"),
+        # One-off: forget the strikethrough already on the grid and re-derive every
+        # cancellation from Guesty. Needed once, because the lines currently on the
+        # tabs were painted by grid position and slid onto the wrong rows.
+        "repair_strikes": _env("SYNC_REPAIR_STRIKES", "0").lower()
+                          in ("1", "true", "yes", "on"),
         "cities": tuple(c.strip() for c in _env(
             "SYNC_CITIES", ",".join(DEFAULT_CITIES)).split(",") if c.strip()),
         # Shared state (Guesty token today, more later). Blank disables it and
@@ -470,6 +475,17 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         print("SYNC_REPAIR_SHIFTED_TABS is ON: a tab still on the old shifted layout "
               "will have its data rows CLEARED and the month rebuilt from Guesty.")
 
+    if cfg.get("repair_strikes"):
+        print("SYNC_REPAIR_STRIKES is ON: the strikethrough already on each tab is "
+              "IGNORED and every cancellation is re-derived from Guesty.")
+        print("   Run this ONCE. The existing lines were painted by grid position "
+              "and slid onto the wrong rows as rows shifted, so preserving them "
+              "would preserve the error. Re-deriving is the only way to get an "
+              "honest month-end count.")
+        print("   A row cancelled BEFORE the current fetch window cannot be "
+              "re-derived and will lose its line -- check the window covers the "
+              "months you care about.")
+
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
              "cancelled": 0, "moved": 0, "out_of_scope": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
@@ -525,7 +541,12 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df,
                 cancel_window=tab_cancel_window(cancel_window, ym),
-                struck_rows=prior_struck,
+                # On a repair run, start from "nothing is struck" so every row is
+                # re-examined against Guesty. The guard has to be relaxed to match:
+                # a month's accumulated cancellations arriving in one run is exactly
+                # the mass strike it exists to block, and here it is legitimate.
+                struck_rows=frozenset() if cfg.get("repair_strikes") else prior_struck,
+                cancel_guard=(1.0, 10 ** 9) if cfg.get("repair_strikes") else (0.5, 10),
                 validated_checkboxes=cb_cols or None,
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
                 out_of_scope_properties=out_of_scope_props,
@@ -573,19 +594,28 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         snap = full.copy(); snap.insert(0, "_tab", ws.title)
         snap.insert(1, "_mark", changes["row_flags"]); snapshots.append(snap)
         if not dry_run:
-            # Rows carried over from the last run that still wear yesterday's
-            # highlight, remapped to their position in the block we're about to write.
-            was_highlighted = {i for i, pos in enumerate(changes["kept_positions"])
-                               if pos in prior_highlight}
+            # The marks already on the grid, passed through as read. No remapping:
+            # apply_row_marks now states the marks absolutely, and both these sets
+            # and row_flags are indexed by the same grid positions. Remapping them
+            # to the rows' NEW positions was the bug -- it cleared marks where the
+            # rows had moved TO and left the real ones where they had moved FROM.
             marks = write_dataframe(ws, full, header_raw,
                                     row_flags=changes["row_flags"],
-                                    was_highlighted=was_highlighted,
+                                    prior_highlight=prior_highlight,
+                                    prior_struck=prior_struck,
                                     checkbox_cols=cb_idx)
             n_written += 1
             print(f"   -> wrote {len(full)} rows to tab '{ws.title}'"
                   + (f" (highlighted {marks.get('highlighted', 0)}, "
                      f"struck {marks.get('struck', 0)}, "
-                     f"cleared {marks.get('unhighlighted', 0)} old highlight(s))."
+                     f"cleared {marks.get('unhighlighted', 0)} old highlight(s)"
+                     # Lines lifted off rows that must NOT carry one. On the first
+                     # run after the anchoring fix this is the repair count: every
+                     # live row wearing a line that slid down onto it. Steady state
+                     # is 0, so a non-zero number later is worth a look.
+                     + (f", lifted {marks['unstruck']} stale line(s)"
+                        if marks.get("unstruck") else "")
+                     + f" -- {marks.get('struck_total', 0)} row(s) struck in total)."
                      if marks else "."))
             if marks.get("rows_added"):
                 print(f"      grew the tab by {marks['rows_added']} row(s) to fit.")

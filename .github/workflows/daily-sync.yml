@@ -19,6 +19,10 @@ on:
         description: "One-off repair: CLEAR tabs stuck on the old shifted layout and rebuild them from Guesty"
         type: boolean
         default: false
+      repair_strikes:
+        description: "One-off repair: IGNORE the strikethrough on each tab and re-derive every cancellation from Guesty"
+        type: boolean
+        default: false
 
 concurrency:
   group: guesty-sheet-sync
@@ -84,6 +88,7 @@ jobs:
           # Manual dispatch only. On a scheduled run this expands to "" and sync.py
           # treats a blank value as unset, so the daily job can never clear a tab.
           SYNC_REPAIR_SHIFTED_TABS: ${{ github.event.inputs.repair_shifted_tabs }}
+          SYNC_REPAIR_STRIKES: ${{ github.event.inputs.repair_strikes }}
         shell: bash
         run: |
           # Decide dry-run vs live:

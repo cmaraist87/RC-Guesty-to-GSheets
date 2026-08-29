@@ -32,6 +32,11 @@ _HIGHLIGHT_FLAGS = ("new", "updated")
 # up at another listing/date); the row's slot is just as dead, so it strikes too.
 _STRIKE_NEW_FLAGS = ("cancelled", "moved")
 _STRIKE_OLD_FLAG = "struck"      # already struck by an earlier run
+# Every flag that means "this row must carry a line through it when the run ends".
+# Stated as an absolute set because the marks are now painted absolutely: a row
+# struck by an earlier run has to be RE-asserted at whatever position it now sits
+# at, not skipped on the assumption its old line is still underneath it.
+_STRIKE_FLAGS = _STRIKE_NEW_FLAGS + (_STRIKE_OLD_FLAG,)
 
 
 def service_account_info(sa_json: str) -> dict:
@@ -304,30 +309,62 @@ def _apply_requests(ws, requests: list[dict]) -> None:
         print(f"   (could not apply row formatting on '{ws.title}': {e})")
 
 
-def apply_row_marks(ws, row_flags: list[str], was_highlighted: set,
-                    n_cols: int, clear_from: int | None = None) -> dict:
+def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
+                    prior_struck: set, n_cols: int,
+                    clear_from: int | None = None) -> dict:
     """
-    Paint the daily diff: strike through newly-cancelled rows, highlight the rows
-    this run wrote, and drop the highlight from rows carried over from the last run.
+    Paint the daily diff, stating the marks ABSOLUTELY rather than incrementally.
+
+    Both sets given are GRID data-row positions read back off the sheet before this
+    run wrote to it (see read_row_marks), and `row_flags` is indexed by the same
+    grid positions, because the new block is written from row 2 down. So the work is
+    a plain set difference: paint what should be marked and isn't, clear what is
+    marked and shouldn't be.
+
+    That symmetry is the whole point. The previous version only ever ADDED
+    strikethrough -- a row already struck was flagged "struck" and deliberately left
+    alone. But an updated reservation is deleted from its row and re-appended at the
+    bottom, so every row below it slides up one, while the strikethrough stays on the
+    grid position it was painted on. The cancelled row slid out from under its own
+    line and a live booking inherited it. Worse, the next run reads that line back,
+    concludes the live booking was already cancelled, excludes it from matching, and
+    re-adds it as new -- one duplicate per row, per run, compounding.
+
+    Highlighting had the same flaw and survived only by luck: the stale amber sat in
+    the tail of the block, which is exactly where the run's own appends land and get
+    painted over. Stating it absolutely means it no longer depends on that.
 
     Only `strikethrough` and `backgroundColor` are touched, so checkbox validation,
     borders, fonts and column widths all survive.
 
+    NOTE: this makes the sync the sole owner of both marks. A strikethrough or an
+    amber fill applied by hand on a data row will be cleared on the next run, because
+    nothing distinguishes it from a stale mark this code left behind. Any other fill
+    colour is ignored and preserved (see _is_highlight).
+
     row_flags       : one flag per data row of the freshly written block.
-    was_highlighted : data-row positions (in the NEW block) that already carry the
-                      highlight from a previous run.
+    prior_highlight : data-row positions carrying OUR amber before this write.
+    prior_struck    : data-row positions carrying a strikethrough before this write.
     clear_from      : first data row of the trailing region being value-cleared;
                       its marks are reset so no ghost formatting is left behind.
     """
-    strike_on = [i for i, f in enumerate(row_flags) if f in _STRIKE_NEW_FLAGS]
-    highlight_on = [i for i, f in enumerate(row_flags)
-                    if f in _HIGHLIGHT_FLAGS and i not in was_highlighted]
-    highlight_off = [i for i in sorted(was_highlighted)
-                     if i < len(row_flags) and row_flags[i] not in _HIGHLIGHT_FLAGS]
+    n = len(row_flags)
+    should_strike = {i for i, f in enumerate(row_flags) if f in _STRIKE_FLAGS}
+    should_light = {i for i, f in enumerate(row_flags) if f in _HIGHLIGHT_FLAGS}
+    # Marks beyond the new block are the trailing region's problem (clear_from).
+    have_strike = {i for i in prior_struck if i < n}
+    have_light = {i for i in prior_highlight if i < n}
+
+    strike_on = sorted(should_strike - have_strike)
+    strike_off = sorted(have_strike - should_strike)
+    highlight_on = sorted(should_light - have_light)
+    highlight_off = sorted(have_light - should_light)
 
     requests = []
     for rows, cell_format, fields in (
         (strike_on, {"textFormat": {"strikethrough": True}},
+         "userEnteredFormat.textFormat.strikethrough"),
+        (strike_off, {"textFormat": {"strikethrough": False}},
          "userEnteredFormat.textFormat.strikethrough"),
         (highlight_on, {"backgroundColor": dict(HIGHLIGHT_RGB)},
          "userEnteredFormat.backgroundColor"),
@@ -337,15 +374,16 @@ def apply_row_marks(ws, row_flags: list[str], was_highlighted: set,
         for a, b in _runs(rows):
             requests.append(_fmt_request(ws, a + 1, b + 2, n_cols, cell_format, fields))
 
-    if clear_from is not None and clear_from > len(row_flags):
+    if clear_from is not None and clear_from > n:
         requests.append(_fmt_request(
-            ws, len(row_flags) + 1, clear_from + 1, n_cols,
+            ws, n + 1, clear_from + 1, n_cols,
             {"textFormat": {"strikethrough": False}, "backgroundColor": dict(NO_FILL_RGB)},
             "userEnteredFormat.textFormat.strikethrough,userEnteredFormat.backgroundColor"))
 
     _apply_requests(ws, requests)
-    return {"struck": len(strike_on), "highlighted": len(highlight_on),
-            "unhighlighted": len(highlight_off)}
+    return {"struck": len(strike_on), "unstruck": len(strike_off),
+            "struck_total": len(should_strike),
+            "highlighted": len(highlight_on), "unhighlighted": len(highlight_off)}
 
 
 def ensure_grid(ws, n_rows: int, n_cols: int, checkbox_cols=()) -> int:
@@ -405,7 +443,8 @@ def apply_checkbox_validation(ws, columns, first_row: int, last_row: int) -> int
 
 def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
                     row_flags: list[str] | None = None,
-                    was_highlighted: set | None = None,
+                    prior_highlight: set | None = None,
+                    prior_struck: set | None = None,
                     checkbox_cols=()) -> dict:
     """
     Write `full` starting at A1, keeping the sheet's ORIGINAL header row intact and
@@ -437,7 +476,8 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
 
     if row_flags is None:
         return {"rows_added": grew, "checkbox_cols": boxed}
-    marks = apply_row_marks(ws, row_flags, was_highlighted or set(), n_cols,
+    marks = apply_row_marks(ws, row_flags, prior_highlight or set(),
+                            prior_struck or set(), n_cols,
                             clear_from=max(prev_row_count - 1, len(row_flags)))
     marks["rows_added"] = grew
     marks["checkbox_cols"] = boxed
