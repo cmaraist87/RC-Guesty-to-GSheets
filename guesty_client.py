@@ -137,7 +137,7 @@ def fetch_reservations(
     token: str,
     filters: list[dict] | None = None,
     fields: str | None = None,
-    sort: str = "checkIn",
+    sort: str = "_id",
     page_size: int = 100,
     extra_params: dict | None = None,
     session: requests.Session | None = None,
@@ -147,6 +147,21 @@ def fetch_reservations(
     Fetch all reservations matching `filters` (Guesty filter-object list),
     following limit/skip pagination.
 
+    SORTS BY `_id`, NOT BY DATE. skip/limit paging is only stable when the sort key
+    is unique. Sorting by `checkIn` ties constantly -- hundreds of bookings share a
+    check-in date -- and the server is free to order tied documents differently on
+    each page request. When it does, a document can land on two pages while another
+    lands on none: the fetch comes back with duplicates AND silent holes.
+
+    That is not theoretical. A 14,182-row fetch sorted by checkIn assembled only
+    13,850 distinct reservations -- 332 duplicates, and by the same mechanism
+    roughly 332 bookings never arrived at all. A booking that never arrives looks
+    exactly like one that was cancelled, so the sheet would strike it through.
+    `_id` is unique, so the ordering is total and paging cannot drift.
+
+    Returns DISTINCT reservations, and complains loudly if the count Guesty reports
+    disagrees with what was actually assembled.
+
     filters example:
         [{"field": "checkOut", "operator": "$gte", "value": "2026-08-01"},
          {"field": "status",   "operator": "$in",  "value": ["confirmed", "reserved"]}]
@@ -155,6 +170,7 @@ def fetch_reservations(
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     results: list[dict] = []
+    reported: int | None = None
     skip = 0
     for _ in range(max_pages):
         params = {"limit": page_size, "skip": skip, "sort": sort}
@@ -173,11 +189,36 @@ def fetch_reservations(
         results.extend(page)
 
         total = payload.get("count")
+        reported = total if total is not None else reported
         skip += page_size
         if not page or (total is not None and skip >= total):
             break
 
-    return results
+    # De-duplicate defensively. With a unique sort this should be a no-op; if it
+    # ever is not, the paging has drifted again and we want to hear about it rather
+    # than quietly write the same booking into the sheet twice.
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for r in results:
+        rid = str(r.get("_id") or r.get("reservationId") or "").strip()
+        if rid:
+            if rid in seen:
+                continue
+            seen.add(rid)
+        unique.append(r)
+
+    if len(unique) != len(results):
+        print(f"!! Pagination returned {len(results) - len(unique)} duplicate "
+              f"reservation(s); de-duplicated to {len(unique)}.")
+    if reported is not None and len(unique) < reported:
+        # The dangerous direction. A booking that never arrived is indistinguishable
+        # from one that was cancelled, so say so plainly instead of letting the
+        # sheet strike it through.
+        print(f"!! Guesty reports {reported} reservation(s) but only {len(unique)} "
+              f"distinct one(s) were assembled -- {reported - len(unique)} missing.")
+        print("   Missing bookings look exactly like cancellations. Do NOT trust "
+              "this run's cancellations; re-run before writing to the sheet.")
+    return unique
 
 
 def fetch_listings(
