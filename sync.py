@@ -896,11 +896,26 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Daily Guesty -> Google Sheet sync.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Fetch + process + merge, write local CSV, but do NOT modify the sheet.")
+    ap.add_argument("--scheduled", action="store_true",
+                    help="This is the nightly cron trigger. Runs only if today's sync "
+                         "has not already happened (see daily_gate), so a late or "
+                         "duplicated trigger neither misses the day nor repeats it.")
     ap.add_argument("--from-json", metavar="PATH",
                     help="Read reservations from a local JSON file instead of the Guesty API.")
     args = ap.parse_args(argv)
 
     cfg = load_config()
+
+    if args.scheduled:
+        # Ask shared state whether today's run has happened, not the clock whether
+        # it is 4 AM. GitHub delivered both of 2026-09-01's triggers more than four
+        # hours late, and an exact-hour check skipped them both, silently.
+        from daily_gate import mark_complete, should_run
+
+        go, why = should_run(state_store(cfg))
+        print(f"Scheduled trigger: {why}")
+        if not go:
+            return 0
 
     if args.from_json:
         with open(args.from_json, encoding="utf-8") as fh:
@@ -920,7 +935,15 @@ def main(argv=None) -> int:
         # possibly stale dataset: diffing it would invent cancellations, and storing
         # it would destroy the baseline the next live run needs.
         record_reservation_snapshot(reservations, cfg, dry_run=args.dry_run)
-    return run(args.dry_run, reservations, cfg)
+    rc = run(args.dry_run, reservations, cfg)
+    if args.scheduled and rc == 0:
+        # Close the day only on success. A failed run leaves the claim open so a
+        # later trigger retries rather than the whole day being lost.
+        from daily_gate import mark_complete
+
+        if mark_complete(state_store(cfg)):
+            print("Recorded today's sync as complete.")
+    return rc
 
 
 if __name__ == "__main__":
