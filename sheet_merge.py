@@ -244,6 +244,8 @@ def merge_reservations_into_sheet(
     validated_checkboxes: frozenset[str] | None = None,
     allowed_cities: frozenset[str] | None = None,
     out_of_scope_properties: dict | None = None,
+    delete_out_of_scope: bool = False,
+    collapse_duplicates: bool = False,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -275,6 +277,17 @@ def merge_reservations_into_sheet(
         market is out of scope, not because a guest cancelled -- and are reported
         under `changes["out_of_scope"]` for deliberate deletion. Candidates are
         expected to be filtered upstream; this only governs the existing rows.
+    delete_out_of_scope : actually DELETE the out-of-scope rows instead of only
+        reporting them. Off by default: deleting a row is the one thing here that
+        cannot be undone from the next run, so it stays a deliberate choice. These
+        are rows for cities the sheet no longer covers -- left over from before the
+        five-market filter -- and they are never cancellations.
+    collapse_duplicates : drop repeated copies of one booking, keeping the first and
+        carrying every tick onto it. The old position-anchored strikethrough left a
+        struck row excluded from matching, so the same booking arrived again as a
+        new row, once per run -- Julio 2026 grew to ~3,600 rows this way. Matching is
+        on (Property, Date, Confirmation Code) and needs a non-blank code, because a
+        blank one cannot distinguish two bookings from two copies of one.
     out_of_scope_properties : {canonical property key -> the city that disqualified
         it}, from the city filter that ran over THIS fetch. Authoritative, because
         the rows that need this most have a blank City in the sheet and no entry in
@@ -490,13 +503,53 @@ def merge_reservations_into_sheet(
             # Carry it, never blank it (see _carry_operator).
             to_append[col] = [_carry_operator(carry, col) for carry in carry_rows]
 
-    # Full corrected sheet = kept existing (minus superseded + empty filler) + new/updated
+    # --- Cleanups that DELETE rows ------------------------------------------
+    # Both are opt-in. Everything else in this function is reversible on the next
+    # run; a deleted row is not, so neither happens unless it was asked for.
     delete_row_nums = {m["row"] for m in delete_rows}
+    drop_pos: set[int] = set()
+    n_duplicates = 0
+
+    if collapse_duplicates and len(sheet):
+        by_booking: dict = {}
+        for i, r in sheet.iterrows():
+            if (i + 2) in delete_row_nums:
+                continue  # already going, as a superseded row
+            if i in struck_rows:
+                # A struck row IS the cancellation record for the month. Never
+                # collapse one away, and never let it become the survivor while a
+                # live copy of the same booking gets deleted instead.
+                continue
+            code = str(r.get("Confirmation Code", "")).strip().upper()
+            prop, day = str(r["Property"]).strip(), _date_key(r["Date"])
+            if not code or not prop or not day:
+                # No code means no way to tell a duplicate from a second booking.
+                # Leaving it alone is the only safe answer.
+                continue
+            by_booking.setdefault((prop, day, code), []).append(i)
+        for positions in by_booking.values():
+            if len(positions) < 2:
+                continue
+            keeper = positions[0]
+            # A tick anywhere in the group survives onto the row that remains --
+            # the team's manual work must not be lost to a cleanup.
+            for col in checkbox_cols:
+                if col not in sheet.columns:
+                    continue
+                if any(str(sheet.at[j, col]).strip().upper() == "TRUE" for j in positions):
+                    sheet.at[keeper, col] = "TRUE"
+            drop_pos.update(positions[1:])
+            n_duplicates += len(positions) - 1
+
+    if delete_out_of_scope:
+        drop_pos.update(out_of_scope_pos)
+
+    # Full corrected sheet = kept existing (minus superseded + empty filler) + new/updated
     if len(sheet):
         not_empty = ~((sheet["Date"].astype(str).str.strip() == "")
                       & (sheet["Property"].astype(str).str.strip() == ""))
-        not_deleted = pd.Series([(i + 2) not in delete_row_nums for i in range(len(sheet))],
-                                index=sheet.index)
+        not_deleted = pd.Series([(i + 2) not in delete_row_nums and i not in drop_pos
+                                 for i in range(len(sheet))], index=sheet.index)
         kept_existing = sheet[not_empty & not_deleted]
     else:
         kept_existing = sheet
@@ -570,6 +623,8 @@ def merge_reservations_into_sheet(
         "cancelled": len(cancelled_pos) - len(moved_pos),
         "moved": len(moved_pos),
         "out_of_scope": len(out_of_scope_pos),
+        "out_of_scope_deleted": len(out_of_scope_pos) if delete_out_of_scope else 0,
+        "duplicates_removed": n_duplicates,
         "cancel_guard_tripped": guard_tripped,
         "missing_city": missing_city,
         "total_rows": len(full),

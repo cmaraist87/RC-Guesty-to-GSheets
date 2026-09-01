@@ -114,6 +114,12 @@ def load_config() -> dict:
         # tabs were painted by grid position and slid onto the wrong rows.
         "repair_strikes": _env("SYNC_REPAIR_STRIKES", "0").lower()
                           in ("1", "true", "yes", "on"),
+        # Housekeeping that DELETES rows. Both off by default: every other change
+        # this sync makes is reversible on the next run, a deleted row is not.
+        "delete_out_of_scope": _env("SYNC_DELETE_OUT_OF_SCOPE", "0").lower()
+                               in ("1", "true", "yes", "on"),
+        "collapse_duplicates": _env("SYNC_COLLAPSE_DUPLICATES", "0").lower()
+                               in ("1", "true", "yes", "on"),
         "cities": tuple(c.strip() for c in _env(
             "SYNC_CITIES", ",".join(DEFAULT_CITIES)).split(",") if c.strip()),
         # Shared state (Guesty token today, more later). Blank disables it and
@@ -505,6 +511,13 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         print("SYNC_REPAIR_SHIFTED_TABS is ON: a tab still on the old shifted layout "
               "will have its data rows CLEARED and the month rebuilt from Guesty.")
 
+    if cfg.get("delete_out_of_scope"):
+        print("SYNC_DELETE_OUT_OF_SCOPE is ON: rows for cities this sheet does not "
+              "cover will be DELETED, not just reported.")
+    if cfg.get("collapse_duplicates"):
+        print("SYNC_COLLAPSE_DUPLICATES is ON: repeated copies of one booking are "
+              "collapsed to a single row, with every tick carried onto it.")
+
     if cfg.get("repair_strikes"):
         print("SYNC_REPAIR_STRIKES is ON: the strikethrough already on each tab is "
               "IGNORED and every cancellation is re-derived from Guesty.")
@@ -576,6 +589,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                 # a month's accumulated cancellations arriving in one run is exactly
                 # the mass strike it exists to block, and here it is legitimate.
                 struck_rows=frozenset() if cfg.get("repair_strikes") else prior_struck,
+                delete_out_of_scope=bool(cfg.get("delete_out_of_scope")),
+                collapse_duplicates=bool(cfg.get("collapse_duplicates")),
                 cancel_guard=(1.0, 10 ** 9) if cfg.get("repair_strikes") else (0.5, 10),
                 validated_checkboxes=cb_cols or None,
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
@@ -807,7 +822,13 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     print(f"  Removed rows    : {stats['removed']}")
     print(f"  Cancelled rows  : {stats.get('cancelled', 0)}  (struck through, kept in place)")
     print(f"  Moved rows      : {stats.get('moved', 0)}  (reassigned in Guesty; old slot struck)")
-    print(f"  Out of scope    : {stats.get('out_of_scope', 0)}  (city this sheet does not cover; left alone)")
+    oos_del = stats.get("out_of_scope_deleted", 0)
+    print(f"  Out of scope    : {stats.get('out_of_scope', 0)}  "
+          + (f"(city this sheet does not cover; {oos_del} DELETED)" if oos_del
+             else "(city this sheet does not cover; left alone)"))
+    if stats.get("duplicates_removed"):
+        print(f"  Duplicates      : {stats['duplicates_removed']}  "
+              f"(repeated copies of one booking, collapsed; ticks carried over)")
     print(f"  Unchanged       : {stats['unchanged']}")
     print(f"  Total in sheet  : {stats['total_rows']}")
     print(f"  Missing City    : {stats['missing_city']}")

@@ -23,6 +23,14 @@ on:
         description: "One-off repair: IGNORE the strikethrough on each tab and re-derive every cancellation from Guesty"
         type: boolean
         default: false
+      delete_out_of_scope:
+        description: "Cleanup: DELETE rows for cities this sheet does not cover (Boston, Nashville, ...) instead of only listing them"
+        type: boolean
+        default: false
+      collapse_duplicates:
+        description: "Cleanup: collapse repeated copies of the same booking into one row (ticks are kept)"
+        type: boolean
+        default: false
       lookback_days:
         description: "Days of history to fetch (blank = the usual 1). Raise it for a strike repair, or cancellations older than this lose their line."
         type: string
@@ -93,6 +101,8 @@ jobs:
           # treats a blank value as unset, so the daily job can never clear a tab.
           SYNC_REPAIR_SHIFTED_TABS: ${{ github.event.inputs.repair_shifted_tabs }}
           SYNC_REPAIR_STRIKES: ${{ github.event.inputs.repair_strikes }}
+          SYNC_DELETE_OUT_OF_SCOPE: ${{ github.event.inputs.delete_out_of_scope }}
+          SYNC_COLLAPSE_DUPLICATES: ${{ github.event.inputs.collapse_duplicates }}
         shell: bash
         run: |
           # Decide dry-run vs live:

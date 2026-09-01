@@ -736,6 +736,103 @@ def test_canonical_property_spelling_is_not_a_cancellation():
     print("OK: cosmetic property-name drift is not read as a cancellation")
 
 
+
+
+# --- Cleanups that delete rows ---------------------------------------------------
+
+CLEAN_COLS = ["City", "Day", "Date", "Confirmation Code", "Guest", "Property",
+              "Check-out Time", "Check-in Time", "T/O", "Adjustments", "Assigned"]
+# What the pipeline itself produces. "Assigned" is the team's column, not ours --
+# a candidate frame carrying it would make the merge treat it as pipeline output
+# rather than as a tick to be preserved.
+PIPE_COLS = [c for c in CLEAN_COLS if c != "Assigned"]
+
+
+def _clean_row(code, prop, date, city="New Orleans", assigned="FALSE"):
+    return {"City": city, "Day": "Fri", "Date": date, "Confirmation Code": code,
+            "Guest": "G " + code, "Property": prop, "Check-out Time": "11:00 AM",
+            "Check-in Time": "", "T/O": "", "Adjustments": "", "Assigned": assigned}
+
+
+def test_duplicates_collapse_and_keep_every_tick():
+    """Repeated copies of one booking collapse to one, ticks ORed onto the survivor.
+
+    The old position-anchored strikethrough excluded a row from matching, so the
+    same booking arrived again as a new row every run. Julio 2026 reached ~3,600
+    rows that way. A cleanup that lost the team's ticks would be its own outage.
+    """
+    sheet = pd.DataFrame([
+        _clean_row("C1", "1201 N Roman", "2026-08-14", assigned="FALSE"),
+        _clean_row("C1", "1201 N Roman", "2026-08-14", assigned="TRUE"),   # a tick here
+        _clean_row("C1", "1201 N Roman", "2026-08-14", assigned="FALSE"),
+        _clean_row("C2", "3223 Canal", "2026-08-15"),
+    ], columns=CLEAN_COLS)
+    cand = pd.DataFrame([_clean_row("C1", "1201 N Roman", "2026-08-14"),
+                         _clean_row("C2", "3223 Canal", "2026-08-15")], columns=PIPE_COLS)
+
+    full, stats, _ = merge_reservations_into_sheet(
+        cand, sheet, cancel_window=("2026-08-01", "2026-08-31"),
+        collapse_duplicates=True, validated_checkboxes=frozenset({"Assigned"}))
+    assert stats["duplicates_removed"] == 2, stats
+    roman = full[full["Property"] == "1201 N Roman"]
+    assert len(roman) == 1, full.to_string()
+    assert roman.iloc[0]["Assigned"] == "TRUE", "a tick anywhere must survive"
+    assert len(full) == 2, full.to_string()
+
+    # Off by default: a deletion must never happen because nobody said so.
+    _, stats_off, _ = merge_reservations_into_sheet(
+        cand, sheet, cancel_window=("2026-08-01", "2026-08-31"))
+    assert stats_off["duplicates_removed"] == 0, stats_off
+    print("OK duplicates: collapsed to one, ticks ORed onto the survivor, opt-in only")
+
+
+def test_collapse_never_touches_a_blank_code_or_a_struck_row():
+    """Two guards. A blank code cannot tell two bookings from two copies of one, and
+    a struck row IS the month's cancellation record."""
+    sheet = pd.DataFrame([
+        _clean_row("", "1201 N Roman", "2026-08-14"),
+        _clean_row("", "1201 N Roman", "2026-08-14"),      # no code -> leave both
+        _clean_row("C9", "3223 Canal", "2026-08-15"),      # struck (position 2)
+        _clean_row("C9", "3223 Canal", "2026-08-15"),      # live copy
+    ], columns=CLEAN_COLS)
+    cand = pd.DataFrame([_clean_row("C9", "3223 Canal", "2026-08-15")], columns=PIPE_COLS)
+
+    full, stats, changes = merge_reservations_into_sheet(
+        cand, sheet, cancel_window=("2026-08-01", "2026-08-31"),
+        struck_rows=frozenset({2}), collapse_duplicates=True,
+        validated_checkboxes=frozenset({"Assigned"}))
+    assert stats["duplicates_removed"] == 0, stats
+    assert (full["Property"] == "1201 N Roman").sum() == 2, "blank codes left alone"
+    # The struck row survives and is still flagged struck.
+    assert "struck" in changes["row_flags"], changes["row_flags"]
+    print("OK collapse: blank codes and struck cancellation rows are left alone")
+
+
+def test_out_of_scope_rows_delete_only_when_asked():
+    sheet = pd.DataFrame([
+        _clean_row("C1", "1201 N Roman", "2026-08-14"),
+        _clean_row("C2", "12 Hinckley 1", "2026-08-15", city="Boston"),
+        _clean_row("C3", "106 Myrtle", "2026-08-16", city="Nashville"),
+    ], columns=CLEAN_COLS)
+    cand = pd.DataFrame([_clean_row("C1", "1201 N Roman", "2026-08-14")], columns=PIPE_COLS)
+    dropped = {"12 hinckley 1": "Boston", "106 myrtle": "Nashville"}
+    kw = dict(cancel_window=("2026-08-01", "2026-08-31"),
+              allowed_cities=frozenset({"new orleans"}), out_of_scope_properties=dropped)
+
+    full, stats, _ = merge_reservations_into_sheet(cand, sheet, **kw)
+    assert stats["out_of_scope"] == 2 and stats["out_of_scope_deleted"] == 0, stats
+    assert len(full) == 3, "reporting only -- nothing removed"
+
+    full, stats, changes = merge_reservations_into_sheet(
+        cand, sheet, delete_out_of_scope=True, **kw)
+    assert stats["out_of_scope_deleted"] == 2, stats
+    assert len(full) == 1 and list(full["Property"]) == ["1201 N Roman"], full.to_string()
+    # Deleted, never struck: these were never cancellations.
+    assert "cancelled" not in changes["row_flags"], changes["row_flags"]
+    assert stats.get("cancelled", 0) == 0, stats
+    print("OK out of scope: reported by default, deleted only on request, never struck")
+
+
 if __name__ == "__main__":
     test_requested_fields_nonempty()
     test_adapter_then_processing_then_merge()
@@ -761,4 +858,7 @@ if __name__ == "__main__":
     test_validated_checkbox_columns_beat_the_header_guess()
     test_shifted_layout_raises_a_typed_error()
     test_canonical_property_spelling_is_not_a_cancellation()
+    test_duplicates_collapse_and_keep_every_tick()
+    test_collapse_never_touches_a_blank_code_or_a_struck_row()
+    test_out_of_scope_rows_delete_only_when_asked()
     print("\nALL TESTS PASSED")
