@@ -32,6 +32,23 @@ CITY_TIMEZONES = {
 }
 DEFAULT_TIMEZONE = "America/Chicago"
 
+# Which Connecteam scheduler each market's jobs belong on, read off the live account
+# on 2026-09-02 rather than assumed. The account has seven schedulers; only these
+# three are cleaning boards. The rest -- "Nola Check list", "Savannah Check List",
+# "Proyect and Supply", "Snapclean" -- are deliberately never written to.
+#
+# Note the two collapses, both confirmed with the client:
+#   * New Orleans and Bay St. Louis share one board. Both Central, so no clash.
+#   * Thunderbolt has no board of its own and rides with Savannah. Adjacent town,
+#     same Eastern zone, same crews.
+CITY_SCHEDULERS = {
+    "new orleans":  "2520975",     # 'NOLA / Bay st Louis MS'
+    "bay st louis": "2520975",
+    "austin":       "10540759",    # 'Austin TX'
+    "savannah":     "10540737",    # 'Savannah'
+    "thunderbolt":  "10540737",
+}
+
 # How long a clean is assumed to take when nothing bounds it -- a departure with no
 # arrival the same day. A turnover ignores this: its window is the real gap between
 # the guest leaving and the next one arriving.
@@ -47,6 +64,16 @@ _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")
 
 def timezone_for(city: str) -> str:
     return CITY_TIMEZONES.get(norm_city(city), DEFAULT_TIMEZONE)
+
+
+def scheduler_for(city: str) -> str | None:
+    """The board this city's jobs belong on, or None if we do not serve it.
+
+    None is a refusal, not a default. Falling back to some scheduler would post a
+    Boston clean onto the New Orleans board, where a crew would see it and have no
+    way to know it was never theirs.
+    """
+    return CITY_SCHEDULERS.get(norm_city(city))
 
 
 def _parse_local(date_str: str, time_str: str, tz: str) -> datetime | None:

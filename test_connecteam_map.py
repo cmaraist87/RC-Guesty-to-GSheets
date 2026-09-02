@@ -125,6 +125,47 @@ def test_shifts_for_rows_pairs_each_payload_with_its_row():
     print("OK: only job rows come back, each paired with the row that produced it")
 
 
+
+
+def test_every_covered_market_has_a_board():
+    """All five markets route somewhere, and only to a real cleaning board."""
+    from connecteam_map import CITY_SCHEDULERS, CITY_TIMEZONES, scheduler_for
+
+    for city in CITY_TIMEZONES:
+        assert scheduler_for(city), city + " has no Connecteam board"
+    # Three cleaning boards only. The account also has checklist and supply
+    # schedulers; those must never receive a job.
+    assert len(set(CITY_SCHEDULERS.values())) == 3, CITY_SCHEDULERS
+    for forbidden in ("12556536", "12899125", "14223255", "19241547"):
+        assert forbidden not in set(CITY_SCHEDULERS.values()), forbidden
+    # Real spellings as they appear in the sheet, not the normalised keys.
+    assert scheduler_for("Bay St. Louis") == scheduler_for("New Orleans") == "2520975"
+    assert scheduler_for("Thunderbolt") == scheduler_for("Savannah") == "10540737"
+    print("OK routing: five markets, three boards, NOLA+BSL and Savannah+Thunderbolt paired")
+
+
+def test_a_city_we_do_not_serve_gets_no_board():
+    """None is a refusal. A fallback would post a Boston clean to a NOLA crew."""
+    from connecteam_map import scheduler_for
+
+    for city in ("Boston", "Nashville", "Scottsdale", "Stowe", "Nantucket", "", "   "):
+        assert scheduler_for(city) is None, city
+    print("OK routing: an uncovered city gets no board rather than a default one")
+
+
+def test_no_board_mixes_two_timezones():
+    """A board carrying both Central and Eastern cities would put half its jobs an
+    hour out. This keeps that from creeping in when a market is added."""
+    from connecteam_map import CITY_SCHEDULERS, timezone_for
+
+    by_board = {}
+    for city, board in CITY_SCHEDULERS.items():
+        by_board.setdefault(board, set()).add(timezone_for(city))
+    for board, zones in by_board.items():
+        assert len(zones) == 1, "board %s mixes timezones: %s" % (board, zones)
+    print("OK routing: no board mixes Central and Eastern cities")
+
+
 if __name__ == "__main__":
     test_only_rows_with_a_checkout_become_jobs()
     test_every_shift_is_unassigned()
@@ -135,4 +176,7 @@ if __name__ == "__main__":
     test_backwards_times_do_not_make_a_negative_shift()
     test_timestamps_are_seconds_not_milliseconds()
     test_shifts_for_rows_pairs_each_payload_with_its_row()
+    test_every_covered_market_has_a_board()
+    test_a_city_we_do_not_serve_gets_no_board()
+    test_no_board_mixes_two_timezones()
     print("\nALL CONNECTEAM-MAP TESTS PASSED")
