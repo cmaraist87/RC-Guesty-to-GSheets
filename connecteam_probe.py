@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 import requests
 
@@ -158,7 +159,10 @@ def main() -> int:
             print("  (no city names in this payload)")
         print()
 
-    # The structural question: one scheduler per city, or jobs inside one scheduler?
+    # --- Which scheduler is which, and what is already in them ------------------
+    # A scheduler per market is the shape we hoped for, but two questions remain:
+    # what the shift sub-resource is actually called (the /jobs guess 404s), and
+    # which of these schedulers are live cleaning boards versus checklists.
     if isinstance(schedulers, dict):
         items = (schedulers.get("data") or {}).get("schedulers") or []
     elif isinstance(schedulers, list):
@@ -166,21 +170,56 @@ def main() -> int:
     else:
         items = []
 
+    now = int(time.time())
+    window = "startTime=%d&endTime=%d" % (now - 30 * 86400, now + 30 * 86400)
+    # Candidate sub-resources, most likely first. Every one of them a GET.
+    CANDIDATES = ["shifts", "jobs", "shift", "schedulerShifts"]
+
     print("=" * 62)
-    print(f"  {len(items)} scheduler(s) found")
+    print("  %d scheduler(s)" % len(items))
     print("=" * 62)
+    working = None
     for s in items:
         sid = s.get("schedulerId") or s.get("id") or "?"
-        print(f"  {sid}  {s.get('name', '(unnamed)')!r}")
-        status, jobs = _get(session, f"/scheduler/v1/schedulers/{sid}/jobs")
-        if status != 200:
-            print(f"    jobs -> HTTP {status} (may simply not be in use)")
-            continue
-        jl = jobs.get("data", {}).get("jobs", jobs) if isinstance(jobs, dict) else jobs
-        jl = jl if isinstance(jl, list) else []
-        print(f"    {len(jl)} job(s)")
-        for j in jl[:15]:
-            print(f"      {j.get('jobId') or j.get('id', '?')}  {j.get('name', '')!r}")
+        print("  [%s] %r" % (sid, s.get("name", "(unnamed)")))
+        for extra in ("timezone", "isArchived", "archived", "type", "color"):
+            if extra in s:
+                print("      %-11s %r" % (extra, s[extra]))
+
+        for sub in (CANDIDATES if working is None else [working]):
+            path = "/scheduler/v1/schedulers/%s/%s?%s" % (sid, sub, window)
+            status, body = _get(session, path)
+            if status != 200:
+                if working is None:
+                    print("      %-11s HTTP %s" % (sub, status))
+                continue
+            working = sub
+            rows = body
+            if isinstance(body, dict):
+                data = body.get("data") or body
+                if isinstance(data, dict):
+                    rows = next((v for v in data.values() if isinstance(v, list)), [])
+                else:
+                    rows = data
+            rows = rows if isinstance(rows, list) else []
+            print("      %-11s HTTP 200 -- %d in the last/next 30 days" % (sub, len(rows)))
+            if rows and isinstance(rows[0], dict):
+                sample = rows[0]
+                # These field names are what the writer must produce. Print the
+                # real keys rather than trusting documentation.
+                print("      sample keys: " + ", ".join(sorted(sample)[:18]))
+                for k in ("title", "jobId", "job", "locationData", "timezone",
+                          "isOpenShift", "assignedUserIds", "startTime", "endTime"):
+                    if k in sample:
+                        print("        %-16s %r" % (k, sample[k]))
+            break
+
+    print("")
+    if working:
+        print("Shift sub-resource is %r." % working)
+    else:
+        print("No shift sub-resource responded. The writer cannot be built until")
+        print("we know the right path -- the API version may differ.")
 
     print("\nNothing was created, changed or deleted.")
     return 0
