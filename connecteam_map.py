@@ -140,8 +140,13 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
         "title": shift_title(row),
         "color": TURNOVER_COLOR if is_turnover else STANDARD_COLOR,
         "isOpenShift": True,               # -> Unassigned
+        # Sent explicitly empty rather than omitted. The API documents
+        # "must be empty for open shifts", and an empty list states that we meant
+        # it; an absent key only says we never thought about it.
+        "assignedUserIds": [],
+        "openSpots": 1,                    # one cleaner per job
         "isPublished": True,
-        # assignedUserIds deliberately absent: an open shift must have none.
+
     }
 
 

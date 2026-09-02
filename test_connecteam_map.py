@@ -38,8 +38,12 @@ def test_every_shift_is_unassigned():
     for row in (_row(), _row(**{"T/O": "yes", "Check-in Time": "04:00 PM"})):
         s = shift_for_row(row)
         assert s["isOpenShift"] is True, s
-        assert "assignedUserIds" not in s, "an open shift must carry no user ids"
-        assert not any("user" in k.lower() for k in s), s
+        # Present and empty, which is what the API documents for an open shift.
+        # Empty says we meant it; absent only says we never considered it.
+        assert s["assignedUserIds"] == [], s
+        assert s["openSpots"] == 1, s
+        # Nothing anywhere in the payload may name a person.
+        assert not any(v for k, v in s.items() if "user" in k.lower()), s
     print("OK: every shift is an open, unassigned shift with no user ids")
 
 
