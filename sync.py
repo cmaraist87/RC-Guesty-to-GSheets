@@ -821,7 +821,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
     print(f"  Updated rows    : {stats['updated']}  (highlighted)")
     print(f"  Removed rows    : {stats['removed']}")
     print(f"  Cancelled rows  : {stats.get('cancelled', 0)}  (struck through, kept in place)")
-    print(f"  Moved rows      : {stats.get('moved', 0)}  (reassigned in Guesty; old slot struck)")
+    print(f"  Moved rows      : {stats.get('moved', 0)}  (reassigned in Guesty; row moved, NOT a cancellation)")
     oos_del = stats.get("out_of_scope_deleted", 0)
     print(f"  Out of scope    : {stats.get('out_of_scope', 0)}  "
           + (f"(city this sheet does not cover; {oos_del} DELETED)" if oos_del
@@ -839,7 +839,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
           + _fmt_rows(changes["removed"], rcols))
     print("\n  --- Cancelled (no longer in Guesty -> struck through) ---\n"
           + _fmt_rows(changes.get("cancelled", []), rcols))
-    print("\n  --- Moved (same booking, new listing/date -> old slot struck) ---\n"
+    print("\n  --- Moved (same booking, new listing/date -> old row removed, new one highlighted) ---\n"
           + _fmt_rows(changes.get("moved", []), mcols))
     if changes.get("out_of_scope"):
         print("\n  --- Out of scope (city not covered; NOT struck, delete by hand) ---\n"
@@ -868,7 +868,7 @@ def emit_change_report(stats: dict, changes: dict, will_write: bool, label: str 
                 fh.write("\n### Removed (superseded)\n" + _md_table(changes["removed"], rcols))
                 fh.write("\n### Cancelled (struck through)\n"
                          + _md_table(changes.get("cancelled", []), rcols))
-                fh.write("\n### Moved (reassigned in Guesty; old slot struck)\n"
+                fh.write("\n### Moved (reassigned in Guesty; row moved, NOT a cancellation)\n"
                          + _md_table(changes.get("moved", []), mcols))
                 if changes.get("out_of_scope"):
                     fh.write("\n### Out of scope — city not covered "

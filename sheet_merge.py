@@ -256,9 +256,10 @@ def merge_reservations_into_sheet(
 
         Such a row is reported as MOVED, not cancelled, when its confirmation code
         turns up elsewhere in `candidates` -- Guesty reassigned the booking to
-        another listing or date. The sheet treatment is identical (old slot struck,
-        new slot appended); only the label and the guard maths differ, because a
-        move proves the fetch carried that reservation.
+        another listing or date. Its old row is REMOVED and the booking reappears
+        where it moved to, highlighted, carrying its ticks -- a move is not a
+        cancellation and must not be counted as one. It also does not inflate the
+        short-fetch guard, because a move proves the fetch carried that reservation.
     struck_rows : 0-based positions of `sheet` rows an earlier run already struck
         through. They are excluded from matching (a re-booking must land as a new
         row) and are not re-reported as cancellations.
