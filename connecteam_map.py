@@ -154,3 +154,48 @@ def shifts_for_rows(rows, clean_hours: float = DEFAULT_CLEAN_HOURS):
         if payload is not None:
             out.append((row, payload))
     return out
+
+
+def shifts_by_scheduler(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
+                        only_city: str | None = None) -> dict[str, list]:
+    """{scheduler id -> [(row, payload)]}, ready to post one board at a time.
+
+    Grouped by board rather than returned flat because that is how the rollout has
+    to happen: one city proved correct before the next is switched on. `only_city`
+    narrows it to a single market for exactly that.
+
+    A row whose city has no board is DROPPED, not defaulted. Silence is the right
+    failure here -- a guessed board puts a clean in front of a crew who cannot know
+    it was never theirs.
+    """
+    wanted = norm_city(only_city) if only_city else None
+    out: dict[str, list] = {}
+    for row, payload in shifts_for_rows(rows, clean_hours=clean_hours):
+        city = row.get("City", "")
+        if wanted is not None and norm_city(city) != wanted:
+            continue
+        board = scheduler_for(city)
+        if board is None:
+            continue
+        out.setdefault(board, []).append((row, payload))
+    return out
+
+
+def assert_unassigned(payloads) -> None:
+    """Raise unless every payload is an open, unassigned shift.
+
+    A last gate before anything reaches the network. The rule -- no job is ever put
+    against a named person -- is the client's standing instruction, and a rule that
+    lives only in a comment is one refactor away from being lost. Anything that even
+    LOOKS like a user reference is rejected, rather than only the field name we
+    happen to use today.
+    """
+    for p in payloads:
+        if not p.get("isOpenShift"):
+            raise ValueError(f"shift is not an open shift: {p!r}")
+        for key, value in p.items():
+            if "user" in key.lower() or "assign" in key.lower():
+                if value:
+                    raise ValueError(
+                        f"shift carries an assignment in {key!r}: {value!r}. Every "
+                        f"job must land in Unassigned.")

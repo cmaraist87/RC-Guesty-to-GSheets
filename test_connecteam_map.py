@@ -166,6 +166,81 @@ def test_no_board_mixes_two_timezones():
     print("OK routing: no board mixes Central and Eastern cities")
 
 
+
+
+def _mixed_rows():
+    import pandas as pd
+    return pd.DataFrame([
+        {"City": "New Orleans", "Date": "2026-09-04", "Property": "1201 N Roman",
+         "Check-out Time": "11:00 AM", "Check-in Time": "", "T/O": "", "Adjustments": ""},
+        {"City": "Bay St. Louis", "Date": "2026-09-04", "Property": "11538 Bayou View",
+         "Check-out Time": "11:00 AM", "Check-in Time": "", "T/O": "", "Adjustments": ""},
+        {"City": "Savannah", "Date": "2026-09-04", "Property": "6 Lake",
+         "Check-out Time": "11:00 AM", "Check-in Time": "4:00 PM", "T/O": "yes",
+         "Adjustments": "ECO"},
+        {"City": "Thunderbolt", "Date": "2026-09-04", "Property": "3 Beaver",
+         "Check-out Time": "10:00 AM", "Check-in Time": "", "T/O": "", "Adjustments": ""},
+        {"City": "Austin", "Date": "2026-09-04", "Property": "2903 E 3rd A",
+         "Check-out Time": "11:00 AM", "Check-in Time": "", "T/O": "", "Adjustments": ""},
+        {"City": "Boston", "Date": "2026-09-04", "Property": "12 Hinckley 1",
+         "Check-out Time": "11:00 AM", "Check-in Time": "", "T/O": "", "Adjustments": ""},
+    ])
+
+
+def test_jobs_are_grouped_by_board_for_a_city_at_a_time_rollout():
+    from connecteam_map import shifts_by_scheduler
+
+    groups = shifts_by_scheduler(_mixed_rows())
+    assert set(groups) == {"2520975", "10540737", "10540759"}, groups
+    # NOLA and Bay St. Louis land on one board; Savannah and Thunderbolt on another.
+    assert len(groups["2520975"]) == 2, groups["2520975"]
+    assert len(groups["10540737"]) == 2, groups["10540737"]
+    assert len(groups["10540759"]) == 1
+    print("OK grouping: jobs arrive per board, so one city can be proved before the next")
+
+
+def test_a_city_with_no_board_is_dropped_not_defaulted():
+    from connecteam_map import shifts_by_scheduler
+
+    every = [r["Property"] for items in shifts_by_scheduler(_mixed_rows()).values()
+             for r, _ in items]
+    assert "12 Hinckley 1" not in every, every
+    assert len(every) == 5, every
+    print("OK grouping: a Boston clean is dropped, never defaulted onto a NOLA board")
+
+
+def test_one_city_can_be_switched_on_alone():
+    from connecteam_map import shifts_by_scheduler
+
+    only = shifts_by_scheduler(_mixed_rows(), only_city="Savannah")
+    assert set(only) == {"10540737"}, only
+    assert [r["Property"] for r, _ in only["10540737"]] == ["6 Lake"], only
+    # Thunderbolt shares Savannah's board but is a different market, so asking for
+    # Savannah must not sweep it along.
+    thun = shifts_by_scheduler(_mixed_rows(), only_city="Thunderbolt")
+    assert [r["Property"] for r, _ in thun["10540737"]] == ["3 Beaver"], thun
+    print("OK grouping: a single market can be switched on without its board-mate")
+
+
+def test_the_unassigned_gate_refuses_anything_with_a_person_on_it():
+    from connecteam_map import assert_unassigned, shifts_by_scheduler
+
+    payloads = [p for items in shifts_by_scheduler(_mixed_rows()).values()
+                for _, p in items]
+    assert_unassigned(payloads)          # everything the mapper makes must pass
+
+    for bad in ({"isOpenShift": True, "assignedUserIds": ["u1"]},
+                {"isOpenShift": True, "userIds": ["u1"]},
+                {"isOpenShift": True, "assignedUsers": [{"id": 1}]},
+                {"isOpenShift": False}):
+        try:
+            assert_unassigned([bad])
+        except ValueError:
+            continue
+        raise AssertionError("gate let an assigned shift through: %r" % bad)
+    print("OK gate: any shift naming a person is refused before it can reach the API")
+
+
 if __name__ == "__main__":
     test_only_rows_with_a_checkout_become_jobs()
     test_every_shift_is_unassigned()
@@ -179,4 +254,8 @@ if __name__ == "__main__":
     test_every_covered_market_has_a_board()
     test_a_city_we_do_not_serve_gets_no_board()
     test_no_board_mixes_two_timezones()
+    test_jobs_are_grouped_by_board_for_a_city_at_a_time_rollout()
+    test_a_city_with_no_board_is_dropped_not_defaulted()
+    test_one_city_can_be_switched_on_alone()
+    test_the_unassigned_gate_refuses_anything_with_a_person_on_it()
     print("\nALL CONNECTEAM-MAP TESTS PASSED")
