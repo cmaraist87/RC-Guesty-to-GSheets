@@ -48,6 +48,34 @@ ENDPOINTS = [
 ]
 
 
+# Connecteam documents X-API-KEY, but gateways and accounts vary -- and a wrong
+# scheme looks identical to a wrong key or the wrong plan, three problems with three
+# different fixes. Try each once and report which one authenticated, so the answer
+# is a fact rather than an inference.
+AUTH_SCHEMES = [
+    ("X-API-KEY header", lambda k: {"X-API-KEY": k}),
+    ("Authorization: Bearer", lambda k: {"Authorization": "Bearer " + k}),
+    ("Authorization: raw key", lambda k: {"Authorization": k}),
+]
+
+
+def authenticate(key):
+    """Find the auth scheme this account accepts. Read-only: one GET per scheme."""
+    last = (None, "", 0, None)
+    for label, build in AUTH_SCHEMES:
+        session = requests.Session()
+        headers = build(key)
+        headers["Accept"] = "application/json"
+        session.headers.update(headers)
+        status, body = _get(session, "/scheduler/v1/schedulers")
+        print("  trying %-24s -> HTTP %s" % (label, status))
+        if status == 200:
+            return session, label, status, body
+        last = (None, label, status, body)
+    return last
+
+
+
 def _get(session: requests.Session, path: str) -> tuple[int, object]:
     r = session.get(BASE + path, timeout=TIMEOUT)
     try:
@@ -83,11 +111,27 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    session = requests.Session()
-    session.headers.update({"X-API-KEY": key, "Accept": "application/json"})
+    print("Connecteam read-only probe -- " + BASE)
+    print("Key: %s...%s (%d chars)" % (key[:4], key[-4:], len(key)))
+    print("Only the SECRET key goes here -- the key NAME is just a label.")
+    print("")
 
-    print(f"Connecteam read-only probe -- {BASE}")
-    print(f"Key: {key[:4]}...{key[-4:]} ({len(key)} chars)\n")
+    session, label, status, body = authenticate(key)
+    if session is None:
+        print("")
+        print("No auth scheme worked. Last response: HTTP %s" % status)
+        print("  " + json.dumps(body)[:400])
+        if status in (401, 403):
+            print("")
+            print("401/403 means one of three things, each with a different fix:")
+            print("  1. The key is wrong, or was copied with stray whitespace.")
+            print("  2. The account is not on Enterprise -- Connecteam gates the API there.")
+            print("  3. The key exists but has no scheduler access.")
+            print("Check the plan first: it is the one that changes our approach.")
+        return 1
+    print("")
+    print("Authenticated with: " + label)
+    print("")
 
     schedulers = None
     for name, path in ENDPOINTS:
