@@ -353,6 +353,17 @@ def merge_reservations_into_sheet(
             "data": r,
         })
 
+    # Where each booking currently sits in the sheet, by its confirmation code. A
+    # move changes the (Property, Date) key, so the code is the only thread back to
+    # the row the booking is leaving -- which is how its ticks follow it across.
+    sheet_by_code: dict[str, list[int]] = {}
+    for i, r in sheet.iterrows():
+        if i in struck_rows:
+            continue
+        code = str(r.get("Confirmation Code", "")).strip().upper()
+        if code:
+            sheet_by_code.setdefault(code, []).append(i)
+
     def _rec(row) -> dict:
         return {
             "Date": _date_key(row.get("Date", "")),
@@ -381,7 +392,16 @@ def merge_reservations_into_sheet(
             live_by_code.setdefault(code, []).append(key)
         matches = existing_by_key.get(key)
         if not matches:
-            keep_idx.append(j); carry_rows.append(None); append_flags.append("new")
+            # No row at this key -- but the booking may simply have moved here from
+            # another property or date. If so, take the ticks with it: an Assigned or
+            # Verified mark is manual work, and losing it because Guesty reassigned a
+            # listing would be the sync destroying the team's own record.
+            came_from = [i for i in sheet_by_code.get(code, [])
+                         if (str(sheet.at[i, "Property"]).strip(),
+                             _date_key(sheet.at[i, "Date"])) != key]
+            keep_idx.append(j)
+            carry_rows.append([sheet.loc[i] for i in came_from] if came_from else None)
+            append_flags.append("new")
             n_new += 1
             new_records.append(_rec(c)); continue
         csig = sig(c, "Check-out Time", "Check-in Time")
@@ -452,7 +472,17 @@ def merge_reservations_into_sheet(
             in_window += 1
             if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
                 cancelled_pos.add(i)
-                if str(r["Confirmation Code"]).strip().upper() in live_by_code:
+                # A MOVE, not a cancellation -- but only if the booking now sits at a
+                # slot the sheet does not already hold a row for.
+                #
+                # Multi-unit listings share one confirmation code: "402 W Hall" and
+                # "404 W Hall" are both HMCQ45A53A. If 402's half is cancelled while
+                # 404's stands, the code is still "live" and the old test called that
+                # a move. It is not -- 402 really was cancelled, and treating it as a
+                # move would delete a genuine cancellation from the month's count.
+                code = str(r["Confirmation Code"]).strip().upper()
+                if any(dest not in existing_by_key
+                       for dest in live_by_code.get(code, [])):
                     moved_pos.add(i)
 
         # The guard exists to catch a SHORT FETCH, where reservations vanish from the
@@ -544,6 +574,20 @@ def merge_reservations_into_sheet(
     if delete_out_of_scope:
         drop_pos.update(out_of_scope_pos)
 
+    # A moved booking is not a cancellation. Its row is deleted here and reappears at
+    # the slot it moved to, highlighted, carrying its ticks -- the booking updated in
+    # place, which is what a guest changing dates or a listing swap actually is.
+    #
+    # Leaving the old slot struck was the old behaviour, and it put moves into the
+    # month-end cancellation count: Agosto showed 112 real cancellations against 254
+    # "moved" rows wearing the same line. The count has to mean one thing.
+    if not guard_tripped:
+        drop_pos.update(moved_pos)
+        cancelled_pos -= moved_pos
+    # When the guard has tripped the fetch is under suspicion, and deleting a row is
+    # the one thing here that the next run cannot undo. Leave moves struck in place
+    # that morning and let the following run move them properly.
+
     # Full corrected sheet = kept existing (minus superseded + empty filler) + new/updated
     if len(sheet):
         not_empty = ~((sheet["Date"].astype(str).str.strip() == "")
@@ -620,7 +664,9 @@ def merge_reservations_into_sheet(
         "updated": n_updated,
         "unchanged": n_unchanged,
         "removed": len(delete_rows),
-        "cancelled": len(cancelled_pos) - len(moved_pos),
+        # cancelled_pos already excludes moves (they are deleted, not struck),
+        # so subtracting them again would report a negative cancellation count.
+        "cancelled": len(cancelled_pos - moved_pos),
         "moved": len(moved_pos),
         "out_of_scope": len(out_of_scope_pos),
         "out_of_scope_deleted": len(out_of_scope_pos) if delete_out_of_scope else 0,

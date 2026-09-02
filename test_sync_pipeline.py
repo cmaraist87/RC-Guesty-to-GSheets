@@ -247,10 +247,43 @@ def test_reassignment_is_reported_as_moved_not_cancelled():
     assert mv["Confirmation Code"] == "HMMOVE0001", mv
     assert mv["Property"] == "3930 Burgundy", mv
     assert "1405 Carondelet B" in mv["Now at"] and "2026-11-09" in mv["Now at"], mv
-    # Both old slots are struck -- a move is just as dead as a cancellation.
-    assert changes["row_flags"][:2] == ["moved", "cancelled"], changes["row_flags"]
-    assert len(full) == 5, full.to_string()  # 2 kept + 3 appended
-    print("OK: reassignment reported as moved (with its destination), still struck")
+    # The moved booking's old row is REMOVED, not struck: it reappears where it
+    # moved to, highlighted. Only the vanished booking keeps a line through it, so
+    # counting struck rows at month end counts cancellations and nothing else.
+    assert "moved" not in changes["row_flags"], changes["row_flags"]
+    assert changes["row_flags"][0] == "cancelled", changes["row_flags"]
+    assert not any(r["Property"] == "3930 Burgundy" for _, r in full.iterrows()),         full.to_string()
+    assert len(full) == 4, full.to_string()   # 1 kept + 3 appended
+    print("OK: reassignment moves the row rather than striking it as a cancellation")
+
+
+def test_a_shared_code_half_cancellation_is_still_a_cancellation():
+    """Multi-unit listings share one confirmation code -- "402 W Hall" and
+    "404 W Hall" are both HMCQ45A53A. If one half is cancelled while the other
+    stands, the code is still live, and the naive test called that a move. It is
+    not: 402 really was cancelled, and calling it a move would delete a genuine
+    cancellation out of the month's count."""
+    existing = pd.DataFrame([
+        _row(**{"Date": "2026-11-12", "Confirmation Code": "HMSHARED01",
+                "Guest": "Jerica Robinson", "Property": "402 W Hall"}),
+        _row(**{"Date": "2026-11-12", "Confirmation Code": "HMSHARED01",
+                "Guest": "Jerica Robinson", "Property": "404 W Hall"}),
+    ], columns=LIVE_HEADER).astype(str)
+    # Only 404 survives, at the very same slot it already occupies.
+    still_there = dict(CANDIDATE, Property="404 W Hall", Guest="Jerica Robinson",
+                       Date="2026-11-12", **{"Confirmation Code": "HMSHARED01"})
+
+    full, stats, changes = merge_reservations_into_sheet(
+        pd.DataFrame([still_there]), existing,
+        cancel_window=("2026-10-01", "2026-12-31"), cancel_guard=(1.0, 999))
+
+    assert stats["moved"] == 0, stats
+    assert stats["cancelled"] == 1, stats
+    assert changes["cancelled"][0]["Property"] == "402 W Hall", changes["cancelled"]
+    # Struck and KEPT -- a cancellation must never be quietly deleted.
+    assert changes["row_flags"][0] == "cancelled", changes["row_flags"]
+    assert "402 W Hall" in list(full["Property"]), full.to_string()
+    print("OK: one unit of a shared-code booking cancelling is a cancellation, not a move")
 
 
 def test_cancel_guard_counts_cancellations_but_not_moves():
@@ -841,6 +874,7 @@ if __name__ == "__main__":
     test_rebooking_over_a_struck_row_lands_as_new()
     test_cancel_guard_blocks_a_short_fetch()
     test_reassignment_is_reported_as_moved_not_cancelled()
+    test_a_shared_code_half_cancellation_is_still_a_cancellation()
     test_cancel_guard_counts_cancellations_but_not_moves()
     test_moves_alone_never_trip_the_guard()
     test_billing_listings_never_become_properties()
