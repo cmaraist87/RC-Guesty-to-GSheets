@@ -315,6 +315,18 @@ _SPANISH_MONTHS = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
                    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
 
+def _is_finished_month(ym: str) -> bool:
+    """Has this month already ended, in Chicago time?
+
+    The current month is not finished -- work is still being done in it -- so only
+    strictly earlier months count. Chicago rather than UTC because that is the day
+    the team is living in; on the 1st of a month those differ for five hours, and
+    getting it wrong would refuse to create the tab everyone is about to use.
+    """
+    today = _today_chicago()
+    return (int(ym[:4]), int(ym[5:7])) < (today.year, today.month)
+
+
 def _spanish_tab(ym: str) -> str:
     """'2026-08' -> 'Agosto 2026' (the tab name to create for that month)."""
     y, m = int(ym[:4]), int(ym[5:7])
@@ -532,6 +544,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
              "cancelled": 0, "moved": 0, "out_of_scope": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
+    bygone = []       # (ym, count): finished months with no tab -- deliberately not created
     created = []      # titles of tabs auto-created this run
     repaired = []     # titles of shifted-layout tabs rebuilt from scratch
     # Tabs that exist but couldn't be merged into. These produce no per-tab report
@@ -550,6 +563,17 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         cand = grp.drop(columns=["_ym"]).reset_index(drop=True)
         ws = month_ws.get((y, mth))
         if ws is None:
+            if _is_finished_month(ym):
+                # A month that has already ended gets no new tab. These rows are
+                # real -- a long stay that began in May and ends in August still
+                # produces a May check-in row -- but that clean happened months ago
+                # and nobody will work it. Creating a whole tab for it is clutter,
+                # and a wider lookback would spawn one per past month.
+                #
+                # A past tab that ALREADY exists is still written to, so July keeps
+                # updating. This only declines to bring a finished month into being.
+                bygone.append((ym, len(cand)))
+                continue
             if dry_run:
                 skipped.append((ym, len(cand)))
                 continue
@@ -679,6 +703,15 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
           f"| Unchanged {grand['unchanged']} | Missing City {grand['missing_city']}")
     if created:
         print("  Auto-created tabs: " + ", ".join(created))
+    if bygone:
+        n = sum(c for _, c in bygone)
+        print(f"  {n} row(s) belong to {len(bygone)} month(s) that have already "
+              f"ended and have no tab. No tab was created for them:")
+        for ym, c in sorted(bygone):
+            print(f"    {ym}: {c} row(s)  (would have been '{_spanish_tab(ym)}')")
+        print("    These are mostly long stays that began before the window. If you "
+              "do want one of these months, create the tab by hand and the next run "
+              "will fill it.")
     if repaired:
         print(("  Tabs repaired (shifted layout cleared + rebuilt): "
                if not dry_run else

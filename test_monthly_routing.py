@@ -698,6 +698,75 @@ def test_repair_flag_survives_a_whole_month_of_cancellations():
     print("OK repair on: the mass-strike guard steps aside for a deliberate repair")
 
 
+
+
+def test_a_finished_month_gets_no_new_tab():
+    """A long stay that began in May still produces a May check-in row. That clean
+    happened months ago and nobody will work it, so no May tab is brought into
+    being for it -- a wider lookback would otherwise spawn one per past month.
+    """
+    ago = FakeWS("Agosto 2026", [HEADER])
+    fake = FakeSS([ago])
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"]}
+    # Checks in on 31 May, out on 3 August: a check-in row for a finished month.
+    long_stay = [{"confirmationCode": "HA-LONG1", "status": "confirmed",
+                  "guest": {"fullName": "Cody Henderson"},
+                  "listing": {"nickname": "1201 N Roman",
+                              "address": {"city": "New Orleans"}},
+                  "checkInDateLocalized": "2026-05-31",
+                  "checkOutDateLocalized": "2026-08-03"}]
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=long_stay, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+
+    assert not any(w.title.startswith("Mayo") for w in fake._wss),         [w.title for w in fake._wss]
+    # The August half of the same stay still lands, so nothing was dropped wholesale.
+    assert ago.updated is not None, "the current-window month must still be written"
+    print("OK: a finished month with no tab is reported, not conjured into existence")
+
+
+def test_the_current_month_is_not_treated_as_finished():
+    """Off-by-one here would refuse to create the tab everyone is about to use."""
+    from datetime import timedelta
+
+    today = sync._today_chicago()
+    this_month = today.strftime("%Y-%m")
+    assert not sync._is_finished_month(this_month), this_month
+    last_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    assert sync._is_finished_month(last_month), last_month
+    next_month = (today.replace(day=28) + timedelta(days=7)).strftime("%Y-%m")
+    assert not sync._is_finished_month(next_month), next_month
+    print("OK: this month and next are open; only strictly earlier months are finished")
+
+
+def test_an_existing_past_tab_is_still_written():
+    """Only CREATION is declined. Julio must keep updating."""
+    jul = FakeWS("Julio 2026", [HEADER])
+    fake = FakeSS([jul])
+    cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
+           "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
+           "statuses": ["confirmed"]}
+    res = [{"confirmationCode": "HA-JUL1", "status": "confirmed",
+            "guest": {"fullName": "Jul Guest"},
+            "listing": {"nickname": "1201 N Roman",
+                        "address": {"city": "New Orleans"}},
+            "checkInDateLocalized": "2026-07-05",
+            "checkOutDateLocalized": "2026-07-09"}]
+    orig = sheets_client.open_spreadsheet
+    sheets_client.open_spreadsheet = lambda sheet_id, sa_json: fake
+    try:
+        assert sync.run(dry_run=False, reservations=res, cfg=cfg) == 0
+    finally:
+        sheets_client.open_spreadsheet = orig
+    assert jul.updated is not None, "an existing past tab must still be written"
+    print("OK: an existing past tab keeps updating; only creation is declined")
+
+
 if __name__ == "__main__":
     test_parse_titles()
     test_tab_cancel_window()
@@ -736,4 +805,7 @@ if __name__ == "__main__":
     finally:
         sheets_client.open_spreadsheet = orig
 
+    test_a_finished_month_gets_no_new_tab()
+    test_the_current_month_is_not_treated_as_finished()
+    test_an_existing_past_tab_is_still_written()
     print("\nALL MONTHLY-ROUTING TESTS PASSED")
