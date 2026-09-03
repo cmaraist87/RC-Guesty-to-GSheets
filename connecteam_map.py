@@ -94,13 +94,23 @@ def _parse_local(date_str: str, time_str: str, tz: str) -> datetime | None:
     return None
 
 
-def shift_title(row) -> str:
-    """What the cleaner reads without opening the card.
+# Whether the card's job name carries the T/O and ECO/ECI/LCO/LCI codes as well as
+# the property. OFF for the first rollout: the client asked for the job field to hold
+# the property name and nothing else "for now". The code that builds the codes is
+# kept, not deleted -- turning this back on is the whole change when they want them.
+INCLUDE_CODES_IN_TITLE = False
 
-    Property first because that is what they navigate by; the codes follow because a
-    turnover or an early check-out changes when they have to be there.
+
+def shift_title(row, with_codes: bool | None = None) -> str:
+    """The job name on the card. The property is what a cleaner navigates by.
+
+    With codes off this is the bare property name, which is what the job field is
+    asked to hold today. With them on, the codes follow the property, because a
+    turnover or an early check-out changes when the cleaner has to be there.
     """
     prop = str(row.get("Property", "")).strip()
+    if not (INCLUDE_CODES_IN_TITLE if with_codes is None else with_codes):
+        return prop
     codes = []
     if str(row.get("T/O", "")).strip().lower() == "yes":
         codes.append("T/O")

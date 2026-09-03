@@ -79,13 +79,31 @@ def test_cities_resolve_to_their_own_timezone():
     print("OK: each city's shift is stamped in its own timezone")
 
 
-def test_title_carries_the_codes_a_cleaner_needs():
-    assert shift_title(_row()) == "1022 Mandeville"
-    assert shift_title(_row(**{"T/O": "yes"})) == "1022 Mandeville — T/O"
-    assert shift_title(_row(**{"Adjustments": "ECO"})) == "1022 Mandeville — ECO"
-    assert shift_title(_row(**{"T/O": "yes", "Adjustments": "ECO, LCI"})) == \
-        "1022 Mandeville — T/O · ECO · LCI"
-    print("OK: the title reads property first, then what changes the timing")
+def test_the_job_field_holds_the_property_name_and_nothing_else():
+    """What the client asked for today: the job field carries the property, full
+    stop. Not the codes -- those come back later, hence a flag rather than a
+    deletion."""
+    for row in (_row(),
+                _row(**{"T/O": "yes"}),
+                _row(**{"Adjustments": "ECO"}),
+                _row(**{"T/O": "yes", "Adjustments": "ECO, LCI"})):
+        assert shift_title(row) == "1022 Mandeville", shift_title(row)
+        assert shift_for_row(row)["title"] == "1022 Mandeville"
+    print("OK: the job field is the property name, with no codes appended")
+
+
+def test_the_codes_can_be_switched_back_on_without_rewriting_anything():
+    """The code that builds them is kept, not deleted. Flipping
+    INCLUDE_CODES_IN_TITLE is the entire change when the codes are wanted."""
+    assert shift_title(_row(), with_codes=True) == "1022 Mandeville"
+    assert shift_title(_row(**{"T/O": "yes"}), with_codes=True) == (
+        "1022 Mandeville — T/O")
+    assert shift_title(_row(**{"Adjustments": "ECO"}), with_codes=True) == (
+        "1022 Mandeville — ECO")
+    assert shift_title(_row(**{"T/O": "yes", "Adjustments": "ECO, LCI"}),
+                       with_codes=True) == (
+        "1022 Mandeville — T/O · ECO · LCI")
+    print("OK: the codes are one flag away, property first then what changes timing")
 
 
 def test_unparseable_rows_are_skipped_not_guessed():
@@ -250,7 +268,8 @@ if __name__ == "__main__":
     test_every_shift_is_unassigned()
     test_turnover_window_is_the_real_gap_between_guests()
     test_cities_resolve_to_their_own_timezone()
-    test_title_carries_the_codes_a_cleaner_needs()
+    test_the_job_field_holds_the_property_name_and_nothing_else()
+    test_the_codes_can_be_switched_back_on_without_rewriting_anything()
     test_unparseable_rows_are_skipped_not_guessed()
     test_backwards_times_do_not_make_a_negative_shift()
     test_timestamps_are_seconds_not_milliseconds()
