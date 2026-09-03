@@ -15,6 +15,7 @@ string (GitHub Actions stores it as a secret) via GOOGLE_SA_JSON.
 from __future__ import annotations
 
 import json
+import re
 import os
 
 import pandas as pd
@@ -48,8 +49,7 @@ def service_account_info(sa_json: str) -> dict:
     """
     sa_json = (sa_json or "").strip()
     if not sa_json:
-        raise RuntimeError("Missing GOOGLE_SA_JSON (service-account key path or JSON).")
-    if sa_json.startswith("{"):
+        raise RuntimeError(chr(10).join(lines)) from e
         return json.loads(sa_json)
     if os.path.exists(sa_json):
         with open(sa_json, encoding="utf-8") as fh:
@@ -64,14 +64,59 @@ def _load_credentials(sa_json: str):
                                                  scopes=SCOPES)
 
 
+SHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9_-]+)")
+
+
+def normalise_sheet_id(value: str) -> str:
+    """Accept the whole URL as well as the bare id.
+
+    Pasting the URL is the obvious thing to do, and the failure it used to cause --
+    a bare 404 from deep inside gspread -- looks nothing like "you pasted too much".
+    """
+    value = (value or "").strip().strip('"').strip("'")
+    found = SHEET_ID_RE.search(value)
+    return found.group(1) if found else value
+
+
 def open_spreadsheet(sheet_id: str, sa_json: str):
-    """Open the spreadsheet (workbook) by ID."""
+    """Open the spreadsheet (workbook) by ID, or by the URL it appears in."""
     import gspread
 
     if not sheet_id:
         raise RuntimeError("Missing SHEET_ID (the spreadsheet's ID from its URL).")
+    key = normalise_sheet_id(sheet_id)
     gc = gspread.authorize(_load_credentials(sa_json))
-    return gc.open_by_key(sheet_id)
+    try:
+        return gc.open_by_key(key)
+    except gspread.exceptions.SpreadsheetNotFound as e:
+        # Google answers 404 both for "no such sheet" and for "you may not see it",
+        # deliberately, so the raw error cannot tell them apart. Say what the two
+        # possibilities actually are, and show what this key CAN see -- which
+        # usually makes the answer obvious.
+        who = ""
+        try:
+            who = service_account_info(sa_json).get("client_email", "")
+        except Exception:  # noqa: BLE001
+            pass
+        lines = [f"Could not open spreadsheet {key!r}.",
+                 "Google returns the same 404 for 'no such sheet' and 'this account "
+                 "cannot see it', so it is one of:",
+                 f"  1. The id is wrong. It is the part of the URL between "
+                 f"/spreadsheets/d/ and /edit ({len(key)} characters given; "
+                 f"a real one is usually 44).",
+                 f"  2. The sheet is not shared with {who or 'the service account'}."]
+        try:
+            visible = gc.list_spreadsheet_files()
+            if visible:
+                lines.append("This account CAN see:")
+                for f in visible[:10]:
+                    lines.append(f"  {f.get('id')}  {f.get('name')!r}")
+            else:
+                lines.append("This account can see no spreadsheets at all, so it is "
+                             "almost certainly (2): share the sheet with it as Editor.")
+        except Exception:  # noqa: BLE001 - diagnosis is best-effort
+            pass
+        raise RuntimeError(chr(10).join(lines)) from e
 
 
 def get_worksheet(sheet_id: str, worksheet_name: str | None, sa_json: str):
