@@ -208,6 +208,18 @@ def guesty_token(cfg: dict) -> str:
                                        may_mint=True)
 
 
+def _note_summary(text: str) -> None:
+    """One line at the top of the GitHub run Summary. Never fails the sync."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(text + chr(10) + chr(10))
+    except OSError:
+        pass
+
+
 def record_reservation_snapshot(reservations: list[dict], cfg: dict,
                                 dry_run: bool = False) -> dict:
     """Fingerprint tonight's reservations, report what moved since last night, store it.
@@ -947,6 +959,11 @@ def main(argv=None) -> int:
 
         go, why = should_run(state_store(cfg))
         print(f"Scheduled trigger: {why}")
+        # Say so on the run's Summary page too. Two triggers fire every morning and
+        # only one does the work; without this the pair are indistinguishable in the
+        # Actions list, and reading the wrong one wastes a round trip.
+        headline = "# Stood down" if not go else "# Running today's sync"
+        _note_summary(headline + chr(10) + chr(10) + why)
         if not go:
             return 0
 
