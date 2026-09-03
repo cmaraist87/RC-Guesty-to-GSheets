@@ -52,13 +52,35 @@ def _shift_key(shift: dict) -> tuple:
     return (str(shift.get("title", "")).strip(), int(shift.get("startTime", 0) or 0))
 
 
+def check_api_key(api_key) -> str:
+    """Reject a key that cannot possibly be one, and say why.
+
+    Placeholder text pasted straight out of an instruction is the common mistake --
+    it produces a 403 that reads exactly like a permissions or plan problem, which
+    is a genuinely expensive thing to go and investigate. A real key has no spaces
+    and no angle brackets, so this costs nothing and saves that trip.
+    """
+    key = str(api_key or "").strip()
+    if not key:
+        raise ConnecteamError(
+            "CONNECTEAM_API_KEY is empty. Set it to the SECRET key from "
+            "General Settings -> API keys (the key's name is only a label).")
+    if key.startswith("<") or key.endswith(">") or any(c.isspace() for c in key):
+        raise ConnecteamError(
+            f"CONNECTEAM_API_KEY does not look like a key: {key[:4]}...{key[-4:]} "
+            f"({len(key)} chars). That is placeholder text, not your key. "
+            "A real one is a single run of letters and digits, around 36 "
+            "characters, with no spaces or angle brackets. Copy the SECRET key "
+            "from Connecteam: General Settings -> API keys.")
+    return key
+
+
 class ConnecteamClient:
     def __init__(self, api_key: str, session: requests.Session | None = None):
-        if not str(api_key or "").strip():
-            raise ConnecteamError("No Connecteam API key.")
+        key = check_api_key(api_key)
         self.session = session or requests.Session()
         self.session.headers.update({
-            "X-API-KEY": str(api_key).strip(),
+            "X-API-KEY": key,
             "Accept": "application/json",
             "Content-Type": "application/json",
         })

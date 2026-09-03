@@ -49,14 +49,21 @@ def shift(title="1201 N Roman", start=1_788_534_000, end=1_788_548_400):
             "title": title, "isOpenShift": True, "assignedUserIds": [], "openSpots": 1}
 
 
-def test_a_key_is_required():
-    for bad in ("", "   ", None):
+def test_a_key_that_cannot_be_a_key_is_refused_before_any_request():
+    """Placeholder text pasted out of an instruction cost a real round trip: it
+    returns 403, which reads exactly like a plan or permissions problem. Catching
+    it here is the difference between a one-line fix and investigating a plan."""
+    for bad in ("", "   ", None,
+                "<paste your Connecteam secret key>",   # the actual mistake made
+                "abc def"):
         try:
             ConnecteamClient(bad)
         except ConnecteamError:
             continue
-        raise AssertionError(f"accepted {bad!r} as an API key")
-    print("OK: refuses to build without an API key")
+        raise AssertionError("accepted %r as an API key" % (bad,))
+    # A real-shaped key still works.
+    ConnecteamClient("2f6f0a1b2c3d4e5f60718293a4b5c6d767b3")
+    print("OK: placeholder text and empty keys are refused, a real one is not")
 
 
 def test_nothing_is_sent_unless_live_is_asked_for():
@@ -140,7 +147,7 @@ def test_shift_identity_is_title_plus_start():
 
 
 if __name__ == "__main__":
-    test_a_key_is_required()
+    test_a_key_that_cannot_be_a_key_is_refused_before_any_request()
     test_nothing_is_sent_unless_live_is_asked_for()
     test_live_actually_creates_and_returns_ids()
     test_a_job_already_on_the_board_is_not_created_twice()

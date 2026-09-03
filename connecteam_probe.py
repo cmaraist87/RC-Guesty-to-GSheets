@@ -112,6 +112,16 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
+    # Placeholder text pasted out of an instruction produces a 403 that reads
+    # exactly like a plan or permissions problem -- an expensive thing to go and
+    # investigate. Catch it here, before three requests are spent proving it.
+    from connecteam_client import ConnecteamError, check_api_key
+    try:
+        key = check_api_key(key)
+    except ConnecteamError as e:
+        print("ERROR: " + str(e), file=sys.stderr)
+        return 2
+
     print("Connecteam read-only probe -- " + BASE)
     print("Key: %s...%s (%d chars)" % (key[:4], key[-4:], len(key)))
     print("Only the SECRET key goes here -- the key NAME is just a label.")
