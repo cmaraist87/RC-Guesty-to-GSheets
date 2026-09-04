@@ -957,7 +957,23 @@ def main(argv=None) -> int:
         # hours late, and an exact-hour check skipped them both, silently.
         from daily_gate import mark_complete, should_run
 
-        go, why = should_run(state_store(cfg))
+        store = state_store(cfg)
+        if store is None:
+            # Not a stand-down -- the shared state is unreachable, and without it the
+            # gate degrades to the exact-hour rule, which never matches because
+            # GitHub delivers these triggers hours late. So the sync would silently
+            # not run, every day, behind a green tick. That is the exact failure this
+            # gate was built to end, so FAIL the run instead of passing quietly.
+            print("!! The shared state bucket is unreachable, so today's run cannot "
+                  "be claimed.", file=sys.stderr)
+            print("   Refusing to continue: without it this job skips silently every "
+                  "morning behind a green tick.", file=sys.stderr)
+            print("   Check the GOOGLE_SA_JSON secret and STATE_BUCKET.", file=sys.stderr)
+            _note_summary("# Sync did NOT run" + chr(10) * 2
+                          + "The shared state bucket is unreachable, so today's run "
+                            "could not be claimed. Check the GOOGLE_SA_JSON secret.")
+            return 4
+        go, why = should_run(store)
         print(f"Scheduled trigger: {why}")
         # Say so on the run's Summary page too. Two triggers fire every morning and
         # only one does the work; without this the pair are indistinguishable in the

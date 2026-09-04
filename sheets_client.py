@@ -49,7 +49,8 @@ def service_account_info(sa_json: str) -> dict:
     """
     sa_json = (sa_json or "").strip()
     if not sa_json:
-        raise RuntimeError(chr(10).join(lines)) from e
+        raise RuntimeError("Missing GOOGLE_SA_JSON (service-account key path or JSON).")
+    if sa_json.lstrip().startswith("{"):
         return json.loads(sa_json)
     if os.path.exists(sa_json):
         with open(sa_json, encoding="utf-8") as fh:
