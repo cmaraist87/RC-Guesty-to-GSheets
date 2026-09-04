@@ -165,10 +165,10 @@ class ConnecteamClient:
         if not live:
             print(f"   scheduler {scheduler_id}: WOULD create {len(wanted)} job(s). "
                   f"Nothing was sent.")
-            for s in wanted[:20]:
+            # Every one of them. This list exists to be checked before anything
+            # becomes real, and a truncated list cannot be checked.
+            for s in wanted:
                 print(f"     {_fmt(s)}")
-            if len(wanted) > 20:
-                print(f"     ... and {len(wanted) - 20} more")
             return []
 
         created: list[dict] = []
