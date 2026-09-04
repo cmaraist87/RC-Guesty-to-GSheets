@@ -704,6 +704,12 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                      # is 0, so a non-zero number later is worth a look.
                      + (f", lifted {marks['unstruck']} stale line(s)"
                         if marks.get("unstruck") else "")
+                     # The per-cell colours. Printed because otherwise there is no
+                     # way to tell from a log whether they were applied at all --
+                     # which is exactly the position the first coloured run left us
+                     # in. Steady state is 0: a colour already right costs nothing.
+                     + (f", {marks['accents']} cell colour(s)"
+                        if marks.get("accents") else "")
                      + f" -- {marks.get('struck_total', 0)} row(s) struck in total)."
                      if marks else "."))
             if marks.get("rows_added"):
