@@ -55,6 +55,25 @@ ADJUSTMENT_RGB = {"red": 0.957, "green": 0.800, "blue": 0.800}  # #F4CCCC
 _OUT_CODES = ("ECO", "LCO")
 _IN_CODES = ("ECI", "LCI")
 
+# The amber "changed today" fill covers only these three columns -- C, D and E on
+# the live sheet. They identify the booking (when, which reservation, whose), which
+# is what someone scanning for changes is looking for, and confining it there means
+# it can never sit on top of the accent colours in G, I and K.
+HIGHLIGHT_COL_NAMES = ("date", "confirmation code", "guest")
+
+
+def highlight_columns(header: list[str]) -> tuple[int, int] | None:
+    """(start, end) column span for the amber fill, or None if unrecognisable.
+
+    A span rather than a list: the three are adjacent on this layout, and one
+    repeatCell over a range is cheaper than three over single cells. If they ever
+    stop being adjacent this returns the span that covers them, which is still
+    correct -- just slightly wider than it needs to be.
+    """
+    found = [i for i, name in enumerate(header)
+             if str(name).strip().lower() in HIGHLIGHT_COL_NAMES]
+    return (min(found), max(found) + 1) if found else None
+
 
 def accent_columns(header: list[str]) -> dict:
     """Which column index carries each role, found by NAME rather than by letter.
@@ -314,7 +333,8 @@ def _is_accent(bg) -> bool:
     return _same_rgb(bg, TURNOVER_RGB) or _same_rgb(bg, ADJUSTMENT_RGB)
 
 
-def read_row_marks(ws, accent_cols=()) -> tuple[set[int], set[int], dict]:
+def read_row_marks(ws, accent_cols=(),
+                   highlight_col: int = 0) -> tuple[set[int], set[int], dict]:
     """
     Read back the marks this sync painted on a previous run.
 
@@ -330,7 +350,7 @@ def read_row_marks(ws, accent_cols=()) -> tuple[set[int], set[int], dict]:
     ss = getattr(ws, "spreadsheet", None)
     if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
         return set(), set(), {}
-    last = max([0, *accent_cols])
+    last = max([0, highlight_col, *accent_cols])
     params = {
         "includeGridData": "true",
         "ranges": [f"'{ws.title}'!A:{_col_letter(last + 1)}"],
@@ -355,7 +375,13 @@ def read_row_marks(ws, accent_cols=()) -> tuple[set[int], set[int], dict]:
         fmt = values[0].get("effectiveFormat") or {}
         if (fmt.get("textFormat") or {}).get("strikethrough"):
             struck.add(i)
-        if _is_highlight(fmt.get("backgroundColor")):
+        # Column A carries the amber on rows highlighted BEFORE the fill was
+        # narrowed to C:E; the span's own first column carries it after. Check
+        # both, so the changeover leaves no row stuck amber forever.
+        probes = [0] + ([highlight_col] if highlight_col else [])
+        if any(_is_highlight((values[c].get("effectiveFormat") or {})
+                             .get("backgroundColor"))
+               for c in probes if c < len(values)):
             highlighted.add(i)
         for c in accent_cols:
             if c < len(values):
@@ -447,7 +473,8 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
                     prior_struck: set, n_cols: int,
                     clear_from: int | None = None,
                     accents_wanted: dict | None = None,
-                    accents_have: dict | None = None) -> dict:
+                    accents_have: dict | None = None,
+                    highlight_span: tuple[int, int] | None = None) -> dict:
     """
     Paint the daily diff, stating the marks ABSOLUTELY rather than incrementally.
 
@@ -499,19 +526,25 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
     highlight_on = sorted(should_light - have_light)
     highlight_off = sorted(have_light - should_light)
 
+    # The amber goes on the identifying columns only. Clearing stays full-width:
+    # rows highlighted before this change carry amber right across, and a narrow
+    # clear would leave a stripe of it behind forever. Accents are repainted after.
+    hl_start, hl_end = highlight_span or (0, n_cols)
+
     requests = []
-    for rows, cell_format, fields in (
+    for rows, cell_format, fields, cols in (
         (strike_on, {"textFormat": {"strikethrough": True}},
-         "userEnteredFormat.textFormat.strikethrough"),
+         "userEnteredFormat.textFormat.strikethrough", (0, n_cols)),
         (strike_off, {"textFormat": {"strikethrough": False}},
-         "userEnteredFormat.textFormat.strikethrough"),
+         "userEnteredFormat.textFormat.strikethrough", (0, n_cols)),
         (highlight_on, {"backgroundColor": dict(HIGHLIGHT_RGB)},
-         "userEnteredFormat.backgroundColor"),
+         "userEnteredFormat.backgroundColor", (hl_start, hl_end)),
         (highlight_off, {"backgroundColor": dict(NO_FILL_RGB)},
-         "userEnteredFormat.backgroundColor"),
+         "userEnteredFormat.backgroundColor", (0, n_cols)),
     ):
         for a, b in _runs(rows):
-            requests.append(_fmt_request(ws, a + 1, b + 2, n_cols, cell_format, fields))
+            requests.append(_fmt_request(ws, a + 1, b + 2, cols[1], cell_format,
+                                         fields, start_col=cols[0]))
 
     if clear_from is not None and clear_from > n:
         requests.append(_fmt_request(
@@ -527,7 +560,14 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
     # a steady week is nothing at all.
     n_accents = 0
     if accents_wanted is not None:
-        repainted = set(highlight_on) | set(highlight_off)
+        # Which rows had an accent column overwritten by the row-level paint just
+        # now. Clearing is full-width so it always does; the amber only does if its
+        # span reaches an accent column, which since it was narrowed to C:E it does
+        # not. So on a normal morning this is just the rows that stopped being
+        # highlighted, and a brand-new turnover keeps its blue for free.
+        touched_cols = set(range(hl_start, hl_end))
+        overlaps = any(c in touched_cols for (_, c) in accents_wanted)
+        repainted = set(highlight_off) | (set(highlight_on) if overlaps else set())
         have = dict(accents_have or {})
         for (r, c), rgb in sorted(accents_wanted.items()):
             if r >= n:
@@ -544,7 +584,8 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
         for (r, c), rgb in sorted(have.items()):
             if r >= n or (r, c) in accents_wanted or not _is_accent(rgb):
                 continue
-            back = HIGHLIGHT_RGB if r in should_light else NO_FILL_RGB
+            # White, not amber: the highlight no longer reaches these columns.
+            back = NO_FILL_RGB
             requests.append(_fmt_request(ws, r + 1, r + 2, c + 1,
                                          {"backgroundColor": dict(back)},
                                          "userEnteredFormat.backgroundColor",
@@ -653,7 +694,8 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
                             prior_struck or set(), n_cols,
                             clear_from=max(prev_row_count - 1, len(row_flags)),
                             accents_wanted=desired_accents(body, header_raw),
-                            accents_have=prior_accents)
+                            accents_have=prior_accents,
+                            highlight_span=highlight_columns(header_raw))
     marks["rows_added"] = grew
     marks["checkbox_cols"] = boxed
     return marks

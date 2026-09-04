@@ -8,7 +8,7 @@ Run: python test_accents.py
 """
 import sheets_client
 from sheets_client import (ADJUSTMENT_RGB, TURNOVER_RGB, accent_columns,
-                           apply_row_marks, desired_accents)
+                           apply_row_marks, desired_accents, highlight_columns)
 
 HEADER = ["City", "Day", "Date", "Confirmation Code", "Guest", ".", "Property",
           "FALSE", "Check out - Time", "FALSE.1", "Check-in Time", "FALSE.2",
@@ -73,8 +73,10 @@ def test_an_accent_survives_the_amber_that_is_painted_over_it():
     about the accent itself changed."""
     ws = FakeWS()
     rows = [_row(to="yes")]
+    # A whole-row highlight span, as it was before the narrowing: it covers G, so
+    # the accent underneath is flattened and has to be put back.
     marks = apply_row_marks(ws, ["new"], prior_highlight=set(), prior_struck=set(),
-                            n_cols=len(HEADER),
+                            n_cols=len(HEADER), highlight_span=(0, len(HEADER)),
                             accents_wanted=desired_accents(rows, HEADER),
                             accents_have={(0, G): TURNOVER_RGB})  # already correct
     assert marks["accents"] == 1, marks
@@ -97,30 +99,26 @@ def test_a_correct_accent_on_a_quiet_row_is_not_repainted():
     print("OK: a colour already correct costs no request -- a quiet week sends none")
 
 
-def test_an_accent_that_stops_applying_goes_back_to_the_row_colour():
-    """A booking that stops being a turnover must not be left blue -- and on an
-    amber row it goes back to amber, not to white."""
-    ws = FakeWS()
-    rows = [_row(to="")]                       # no longer a turnover
-    apply_row_marks(ws, ["updated"], prior_highlight={0}, prior_struck=set(),
-                    n_cols=len(HEADER),
-                    accents_wanted=desired_accents(rows, HEADER),
-                    accents_have={(0, G): TURNOVER_RGB})
-    fills = [r["repeatCell"]["cell"]["userEnteredFormat"]["backgroundColor"]
-             for r in ws.spreadsheet.requests
-             if r["repeatCell"]["range"].get("startColumnIndex") == G]
-    assert fills and sheets_client._same_rgb(fills[-1], sheets_client.HIGHLIGHT_RGB), fills
+def test_an_accent_that_stops_applying_reverts_to_white():
+    """A booking that stops being a turnover must not be left blue.
 
-    ws2 = FakeWS()
-    apply_row_marks(ws2, [""], prior_highlight=set(), prior_struck=set(),
-                    n_cols=len(HEADER),
-                    accents_wanted=desired_accents(rows, HEADER),
-                    accents_have={(0, G): TURNOVER_RGB})
-    fills2 = [r["repeatCell"]["cell"]["userEnteredFormat"]["backgroundColor"]
-              for r in ws2.spreadsheet.requests
-              if r["repeatCell"]["range"].get("startColumnIndex") == G]
-    assert fills2 and sheets_client._same_rgb(fills2[-1], sheets_client.NO_FILL_RGB), fills2
-    print("OK: a lapsed accent reverts to the row's own colour, amber or white")
+    It reverts to white, not to amber, because since the fill was narrowed to C:E
+    the highlight never reaches these columns at all -- so white IS the row's own
+    colour here, even on a row highlighted this morning.
+    """
+    for flags, prior in ((["updated"], {0}), ([""], set())):
+        ws = FakeWS()
+        apply_row_marks(ws, flags, prior_highlight=prior, prior_struck=set(),
+                        n_cols=len(HEADER),
+                        highlight_span=(2, 5),
+                        accents_wanted=desired_accents([_row(to="")], HEADER),
+                        accents_have={(0, G): TURNOVER_RGB})
+        fills = [r["repeatCell"]["cell"]["userEnteredFormat"]["backgroundColor"]
+                 for r in ws.spreadsheet.requests
+                 if r["repeatCell"]["range"].get("startColumnIndex") == G]
+        assert fills, (flags, ws.spreadsheet.requests)
+        assert sheets_client._same_rgb(fills[-1], sheets_client.NO_FILL_RGB), fills
+    print("OK: a lapsed accent reverts to white, which is what those columns now are")
 
 
 def test_a_colour_the_team_applied_by_hand_is_left_alone():
@@ -141,13 +139,74 @@ def test_an_unrecognisable_layout_paints_nothing():
     print("OK: a layout without those columns produces no accents at all")
 
 
+
+def test_the_amber_covers_only_C_D_and_E():
+    """Date, Confirmation Code and Guest -- what someone scanning for changes
+    reads. Confined there, it can never sit on top of an accent."""
+    span = highlight_columns(HEADER)
+    assert span == (2, 5), span                      # C, D, E
+    for accent_col in (G, I, K):
+        assert not (span[0] <= accent_col < span[1]), accent_col
+
+    ws = FakeWS()
+    apply_row_marks(ws, ["new"], prior_highlight=set(), prior_struck=set(),
+                    n_cols=len(HEADER), highlight_span=span,
+                    accents_wanted={}, accents_have={})
+    fills = [(r["repeatCell"]["range"]["startColumnIndex"],
+              r["repeatCell"]["range"]["endColumnIndex"])
+             for r in ws.spreadsheet.requests
+             if "backgroundColor" in r["repeatCell"]["fields"]]
+    assert fills == [(2, 5)], fills
+    print("OK: the amber is painted on C:E only, never across the whole row")
+
+
+def test_a_turnover_keeps_its_blue_on_a_row_highlighted_the_same_morning():
+    """The case that prompted this: before, the amber flattened the accent."""
+    ws = FakeWS()
+    rows = [_row(to="yes", adj="ECO")]
+    apply_row_marks(ws, ["new"], prior_highlight=set(), prior_struck=set(),
+                    n_cols=len(HEADER),
+                    highlight_span=highlight_columns(HEADER),
+                    accents_wanted=desired_accents(rows, HEADER),
+                    accents_have={(0, G): TURNOVER_RGB, (0, I): ADJUSTMENT_RGB})
+    painted = {}
+    for r in ws.spreadsheet.requests:
+        rng = r["repeatCell"]["range"]
+        if "backgroundColor" not in r["repeatCell"]["fields"]:
+            continue
+        for c in range(rng["startColumnIndex"], rng["endColumnIndex"]):
+            painted[c] = r["repeatCell"]["cell"]["userEnteredFormat"]["backgroundColor"]
+    # The amber never reaches G or I, so the accents there are untouched.
+    assert set(painted) == {2, 3, 4}, painted
+    assert sheets_client._same_rgb(painted[2], sheets_client.HIGHLIGHT_RGB)
+    print("OK: a turnover on a brand-new row keeps its blue and its red")
+
+
+def test_a_row_highlighted_before_the_change_is_cleared_right_across():
+    """Rows amber-ed under the old whole-row rule must not keep a stripe of it."""
+    ws = FakeWS()
+    apply_row_marks(ws, [""], prior_highlight={0}, prior_struck=set(),
+                    n_cols=len(HEADER),
+                    highlight_span=highlight_columns(HEADER),
+                    accents_wanted={}, accents_have={})
+    clears = [(r["repeatCell"]["range"]["startColumnIndex"],
+               r["repeatCell"]["range"]["endColumnIndex"])
+              for r in ws.spreadsheet.requests
+              if "backgroundColor" in r["repeatCell"]["fields"]]
+    assert clears == [(0, len(HEADER))], clears
+    print("OK: clearing stays full-width, so legacy whole-row amber goes entirely")
+
+
 if __name__ == "__main__":
     test_the_columns_land_on_G_I_K_M_N()
     test_turnover_colours_the_property_cell_only()
     test_out_codes_colour_the_checkout_time_and_in_codes_the_checkin()
     test_an_accent_survives_the_amber_that_is_painted_over_it()
     test_a_correct_accent_on_a_quiet_row_is_not_repainted()
-    test_an_accent_that_stops_applying_goes_back_to_the_row_colour()
+    test_an_accent_that_stops_applying_reverts_to_white()
     test_a_colour_the_team_applied_by_hand_is_left_alone()
     test_an_unrecognisable_layout_paints_nothing()
+    test_the_amber_covers_only_C_D_and_E()
+    test_a_turnover_keeps_its_blue_on_a_row_highlighted_the_same_morning()
+    test_a_row_highlighted_before_the_change_is_cleared_right_across()
     print("\nALL ACCENT TESTS PASSED")

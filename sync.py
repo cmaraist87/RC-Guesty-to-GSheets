@@ -510,7 +510,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
 
     from sheets_client import (open_spreadsheet, month_worksheets, read_as_dataframe,
                                read_row_marks, write_dataframe, create_month_tab,
-                               accent_columns,
+                               accent_columns, highlight_columns,
                                clear_data_rows, read_checkbox_columns)
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
@@ -603,8 +603,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
         # Also read the per-cell accent fills, so a turnover colour that is
         # already right is not repainted every morning.
         accent_cols = sorted(set(accent_columns(header_raw).values()))
+        hl_span = highlight_columns(header_raw)
         prior_struck, prior_highlight, prior_accents = read_row_marks(
-            ws, accent_cols=accent_cols)
+            ws, accent_cols=accent_cols,
+            highlight_col=hl_span[0] if hl_span else 0)
         # Which columns really are checkboxes, per the tab's own data-validation.
         # Empty (unreadable tab, or none defined) -> merge falls back to guessing.
         cb_idx = read_checkbox_columns(ws)
