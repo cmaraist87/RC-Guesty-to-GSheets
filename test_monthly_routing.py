@@ -483,7 +483,8 @@ def test_read_row_marks():
         _cell(bg=dict(sheets_client.HIGHLIGHT_RGB)),        # data row 2: highlighted
         _cell(bg={"red": 0.8, "green": 0.9, "blue": 1.0}),  # data row 3: someone else's fill
     ])
-    struck, highlighted = sheets_client.read_row_marks(ws)
+    struck, highlighted, accents = sheets_client.read_row_marks(ws)
+    assert accents == {}, "no accent columns asked for -> none read back"
     assert struck == {1}, struck
     assert highlighted == {2}, highlighted
     print("OK read_row_marks: strikethrough + our highlight recognised, other fills ignored")
@@ -497,7 +498,7 @@ def test_apply_row_marks_requests():
     marks = sheets_client.apply_row_marks(ws, flags, prior_highlight={0, 1},
                                           prior_struck={4}, n_cols=len(HEADER))
     assert marks == {"struck": 2, "unstruck": 0, "struck_total": 3,
-                     "highlighted": 1, "unhighlighted": 1}, marks
+                     "highlighted": 1, "unhighlighted": 1, "accents": 0}, marks
 
     got = [(r["repeatCell"]["fields"],
             r["repeatCell"]["range"]["startRowIndex"],

@@ -39,6 +39,64 @@ _STRIKE_OLD_FLAG = "struck"      # already struck by an earlier run
 # at, not skipped on the assumption its old line is still underneath it.
 _STRIKE_FLAGS = _STRIKE_NEW_FLAGS + (_STRIKE_OLD_FLAG,)
 
+# --- Per-cell accents ------------------------------------------------------------
+# Row marks say what changed TODAY. These say what the job IS, and so they belong to
+# the booking rather than to the run: a turnover is still a turnover tomorrow.
+#
+#   T/O = yes                 -> the Property cell     (G), light cornflower blue 2
+#   Adjustments has ECO/LCO   -> the Check-out Time    (I), light red 3
+#   Adjustments has ECI/LCI   -> the Check-in Time     (K), light red 3
+#
+# The out-codes colour the check-out time and the in-codes the check-in time, so the
+# colour sits on the number it is a warning about.
+TURNOVER_RGB = {"red": 0.643, "green": 0.761, "blue": 0.957}    # #A4C2F4
+ADJUSTMENT_RGB = {"red": 0.957, "green": 0.800, "blue": 0.800}  # #F4CCCC
+
+_OUT_CODES = ("ECO", "LCO")
+_IN_CODES = ("ECI", "LCI")
+
+
+def accent_columns(header: list[str]) -> dict:
+    """Which column index carries each role, found by NAME rather than by letter.
+
+    The rules were given as G / I / K / M / N, and on the live sheet they land
+    exactly there. Matching on the header anyway means a column inserted one day
+    moves the accents with it instead of quietly colouring the wrong cells.
+    """
+    want = {
+        "property": ("property",),
+        "checkout": ("check out - time", "check-out time", "checkout time"),
+        "checkin": ("check-in time", "check in - time", "checkin time"),
+        "turnover": ("t/o", "to"),
+        "adjustments": ("adjustments", "adjustment"),
+    }
+    found = {}
+    for i, name in enumerate(header):
+        key = str(name).strip().lower()
+        for role, names in want.items():
+            if key in names and role not in found:
+                found[role] = i
+    return found
+
+
+def desired_accents(rows, header: list[str]) -> dict:
+    """{(data row, column index) -> rgb} for every cell an accent applies to."""
+    cols = accent_columns(header)
+    needed = ("property", "checkout", "checkin", "turnover", "adjustments")
+    if not all(c in cols for c in needed):
+        return {}
+    out = {}
+    for r, row in enumerate(rows):
+        turnover = str(row[cols["turnover"]]).strip().lower() if cols["turnover"] < len(row) else ""
+        adj = str(row[cols["adjustments"]]).strip().upper() if cols["adjustments"] < len(row) else ""
+        if turnover == "yes":
+            out[(r, cols["property"])] = TURNOVER_RGB
+        if any(code in adj for code in _OUT_CODES):
+            out[(r, cols["checkout"])] = ADJUSTMENT_RGB
+        if any(code in adj for code in _IN_CODES):
+            out[(r, cols["checkin"])] = ADJUSTMENT_RGB
+    return out
+
 
 def service_account_info(sa_json: str) -> dict:
     """Parse GOOGLE_SA_JSON, which may be raw JSON or a path to a key file.
@@ -241,20 +299,41 @@ def _is_highlight(bg) -> bool:
             and _close(bg.get("blue", 1.0), HIGHLIGHT_RGB["blue"]))
 
 
-def read_row_marks(ws) -> tuple[set[int], set[int]]:
+def _same_rgb(a, b) -> bool:
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    return all(_close(a.get(k, 1.0), b.get(k, 1.0)) for k in ("red", "green", "blue"))
+
+
+def _is_accent(bg) -> bool:
+    """One of ours, rather than a colour somebody applied by hand.
+
+    Only our own accents are ever cleared. A fill the team put on a cell for their
+    own reasons is left exactly where they put it.
+    """
+    return _same_rgb(bg, TURNOVER_RGB) or _same_rgb(bg, ADJUSTMENT_RGB)
+
+
+def read_row_marks(ws, accent_cols=()) -> tuple[set[int], set[int], dict]:
     """
     Read back the marks this sync painted on a previous run.
 
-    Returns (struck, highlighted) as 0-based DATA-row positions (data row 0 is
-    grid row 2). Only column A is sampled -- marks are applied to whole rows.
-    Returns empty sets if the workbook can't be queried (offline tests, fakes).
+    Returns (struck, highlighted, accents) with 0-based DATA-row positions (data
+    row 0 is grid row 2). Row marks come from column A, since they are applied to
+    whole rows. `accents` maps (row, column) -> the fill currently on that cell,
+    for the columns named in `accent_cols`, so per-cell colours can be diffed the
+    same way -- painted where they are missing, and not repainted where they are
+    already right.
+
+    Returns empties if the workbook can't be queried (offline tests, fakes).
     """
     ss = getattr(ws, "spreadsheet", None)
     if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
-        return set(), set()
+        return set(), set(), {}
+    last = max([0, *accent_cols])
     params = {
         "includeGridData": "true",
-        "ranges": [f"'{ws.title}'!A:A"],
+        "ranges": [f"'{ws.title}'!A:{_col_letter(last + 1)}"],
         "fields": "sheets(data(rowData(values(effectiveFormat("
                   "backgroundColor,textFormat/strikethrough)))))",
     }
@@ -262,13 +341,13 @@ def read_row_marks(ws) -> tuple[set[int], set[int]]:
         meta = ss.fetch_sheet_metadata(params)
     except Exception as e:  # noqa: BLE001 - marks are cosmetic; never fail the sync
         print(f"   (could not read existing row marks on '{ws.title}': {e})")
-        return set(), set()
+        return set(), set(), {}
 
     sheets = meta.get("sheets") or []
     data = ((sheets[0].get("data") or [{}])[0] if sheets else {})
     row_data = data.get("rowData") or []
 
-    struck, highlighted = set(), set()
+    struck, highlighted, accents = set(), set(), {}
     for i, rd in enumerate(row_data[1:]):  # skip the header row
         values = rd.get("values") or []
         if not values:
@@ -278,7 +357,12 @@ def read_row_marks(ws) -> tuple[set[int], set[int]]:
             struck.add(i)
         if _is_highlight(fmt.get("backgroundColor")):
             highlighted.add(i)
-    return struck, highlighted
+        for c in accent_cols:
+            if c < len(values):
+                cell = (values[c].get("effectiveFormat") or {}).get("backgroundColor")
+                if cell:
+                    accents[(i, c)] = cell
+    return struck, highlighted, accents
 
 
 def read_checkbox_columns(ws, probe_rows: int = 25) -> set[int]:
@@ -332,12 +416,16 @@ def _runs(indices) -> list[tuple[int, int]]:
 
 
 def _fmt_request(ws, start_row: int, end_row: int, n_cols: int,
-                 cell_format: dict, fields: str) -> dict:
-    """repeatCell over grid rows [start_row, end_row) -- 0-based, header is row 0."""
+                 cell_format: dict, fields: str, start_col: int = 0) -> dict:
+    """repeatCell over grid rows [start_row, end_row) -- 0-based, header is row 0.
+
+    `start_col` narrows it to a single column for a per-cell accent; the row marks
+    leave it at 0 and paint the full width.
+    """
     return {"repeatCell": {
         "range": {"sheetId": ws.id,
                   "startRowIndex": start_row, "endRowIndex": end_row,
-                  "startColumnIndex": 0, "endColumnIndex": n_cols},
+                  "startColumnIndex": start_col, "endColumnIndex": n_cols},
         "cell": {"userEnteredFormat": cell_format},
         "fields": fields,
     }}
@@ -357,7 +445,9 @@ def _apply_requests(ws, requests: list[dict]) -> None:
 
 def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
                     prior_struck: set, n_cols: int,
-                    clear_from: int | None = None) -> dict:
+                    clear_from: int | None = None,
+                    accents_wanted: dict | None = None,
+                    accents_have: dict | None = None) -> dict:
     """
     Paint the daily diff, stating the marks ABSOLUTELY rather than incrementally.
 
@@ -393,6 +483,9 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
     prior_struck    : data-row positions carrying a strikethrough before this write.
     clear_from      : first data row of the trailing region being value-cleared;
                       its marks are reset so no ghost formatting is left behind.
+    accents_wanted  : {(row, column) -> rgb} for the per-cell colours that describe
+                      the JOB rather than the run -- turnover, early/late codes.
+    accents_have    : the same, as currently painted, so only differences are sent.
     """
     n = len(row_flags)
     should_strike = {i for i, f in enumerate(row_flags) if f in _STRIKE_FLAGS}
@@ -426,10 +519,43 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
             {"textFormat": {"strikethrough": False}, "backgroundColor": dict(NO_FILL_RGB)},
             "userEnteredFormat.textFormat.strikethrough,userEnteredFormat.backgroundColor"))
 
+    # --- per-cell accents, painted LAST so they survive the row fill --------
+    # The amber above is painted across the whole row, so on any row it just
+    # touched it has flattened the accent underneath. Those rows are repainted
+    # here regardless of what was read, because what was read is already stale.
+    # Everything else is only touched where the colour actually differs, which in
+    # a steady week is nothing at all.
+    n_accents = 0
+    if accents_wanted is not None:
+        repainted = set(highlight_on) | set(highlight_off)
+        have = dict(accents_have or {})
+        for (r, c), rgb in sorted(accents_wanted.items()):
+            if r >= n:
+                continue
+            if r not in repainted and _same_rgb(have.get((r, c)), rgb):
+                continue
+            requests.append(_fmt_request(ws, r + 1, r + 2, c + 1,
+                                         {"backgroundColor": dict(rgb)},
+                                         "userEnteredFormat.backgroundColor",
+                                         start_col=c))
+            n_accents += 1
+        # An accent that no longer applies -- a turnover that stopped being one --
+        # must go back to whatever the row itself says, not to white.
+        for (r, c), rgb in sorted(have.items()):
+            if r >= n or (r, c) in accents_wanted or not _is_accent(rgb):
+                continue
+            back = HIGHLIGHT_RGB if r in should_light else NO_FILL_RGB
+            requests.append(_fmt_request(ws, r + 1, r + 2, c + 1,
+                                         {"backgroundColor": dict(back)},
+                                         "userEnteredFormat.backgroundColor",
+                                         start_col=c))
+            n_accents += 1
+
     _apply_requests(ws, requests)
     return {"struck": len(strike_on), "unstruck": len(strike_off),
             "struck_total": len(should_strike),
-            "highlighted": len(highlight_on), "unhighlighted": len(highlight_off)}
+            "highlighted": len(highlight_on), "unhighlighted": len(highlight_off),
+            "accents": n_accents}
 
 
 def ensure_grid(ws, n_rows: int, n_cols: int, checkbox_cols=()) -> int:
@@ -491,6 +617,7 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
                     row_flags: list[str] | None = None,
                     prior_highlight: set | None = None,
                     prior_struck: set | None = None,
+                    prior_accents: dict | None = None,
                     checkbox_cols=()) -> dict:
     """
     Write `full` starting at A1, keeping the sheet's ORIGINAL header row intact and
@@ -524,7 +651,9 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
         return {"rows_added": grew, "checkbox_cols": boxed}
     marks = apply_row_marks(ws, row_flags, prior_highlight or set(),
                             prior_struck or set(), n_cols,
-                            clear_from=max(prev_row_count - 1, len(row_flags)))
+                            clear_from=max(prev_row_count - 1, len(row_flags)),
+                            accents_wanted=desired_accents(body, header_raw),
+                            accents_have=prior_accents)
     marks["rows_added"] = grew
     marks["checkbox_cols"] = boxed
     return marks
