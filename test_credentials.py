@@ -61,8 +61,79 @@ def test_nothing_and_nonsense_are_refused_with_distinct_messages():
     print("OK: empty and nonsense are refused, and say which is which")
 
 
+
+
+# --- transient Google failures ---------------------------------------------------
+
+class _ApiError(Exception):
+    def __init__(self, code):
+        self.response = type("R", (), {"status_code": code})()
+
+
+def test_transient_google_failures_are_retried():
+    """2026-09-07: a bare 503 from Sheets killed the whole morning's run, after a
+    Guesty token had already been spent. Every one of these means 'try again
+    shortly', and the run is worth several attempts."""
+    from sheets_client import TRANSIENT_STATUS, with_retry
+
+    for code in TRANSIENT_STATUS:
+        seen = {"n": 0}
+
+        def flaky(code=code):
+            seen["n"] += 1
+            if seen["n"] < 3:
+                raise _ApiError(code)
+            return "written"
+
+        assert with_retry(flaky, "a write", base=1.0) == "written", code
+        assert seen["n"] == 3, (code, seen)
+    print("OK: 429/500/502/503/504 are retried until they succeed")
+
+
+def test_permanent_failures_are_not_retried():
+    """Waiting does not fix a permission error or a missing sheet, and retrying
+    one only delays the report."""
+    from sheets_client import with_retry
+
+    for code in (400, 401, 403, 404):
+        calls = {"n": 0}
+
+        def doomed(code=code):
+            calls["n"] += 1
+            raise _ApiError(code)
+
+        try:
+            with_retry(doomed, "a write", base=1.0)
+        except _ApiError:
+            assert calls["n"] == 1, (code, calls)
+            continue
+        raise AssertionError(f"{code} should have been raised straight away")
+    print("OK: 400/401/403/404 are raised at once, never retried")
+
+
+def test_a_transient_failure_that_never_clears_still_gives_up():
+    from sheets_client import with_retry
+
+    calls = {"n": 0}
+
+    def always(**_):
+        calls["n"] += 1
+        raise _ApiError(503)
+
+    try:
+        with_retry(always, "a write", tries=3, base=1.0)
+    except _ApiError:
+        assert calls["n"] == 3, calls
+        print("OK: a failure that never clears gives up rather than looping forever")
+        return
+    raise AssertionError("should have raised after exhausting attempts")
+
+
 if __name__ == "__main__":
     test_raw_json_is_accepted()
     test_a_file_path_is_accepted()
     test_nothing_and_nonsense_are_refused_with_distinct_messages()
+    test_transient_google_failures_are_retried()
+    test_permanent_failures_are_not_retried()
+    test_a_transient_failure_that_never_clears_still_gives_up()
     print("\nALL CREDENTIAL TESTS PASSED")

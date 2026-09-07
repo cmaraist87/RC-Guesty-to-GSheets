@@ -131,7 +131,10 @@ jobs:
           fi
           SCHED=""
           if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then SCHED="--scheduled"; fi
-          python sync.py $DRY $SCHED
+          # -u keeps stdout unbuffered so the log reads in the order things
+          # actually happened. Today's traceback printed ABOVE the output that
+          # preceded it, which makes a failure far harder to read than it is.
+          python -u sync.py $DRY $SCHED
 
       - name: Upload output snapshot
         if: steps.guard.outputs.run == 'yes'

@@ -117,6 +117,49 @@ def desired_accents(rows, header: list[str]) -> dict:
     return out
 
 
+# Google Sheets fails transiently, and did on 2026-09-07: a bare 503 killed the
+# whole morning's run after the Guesty token had already been spent. Every one of
+# these is a "try again shortly", not a "this will never work".
+TRANSIENT_STATUS = (429, 500, 502, 503, 504)
+
+
+def _status_of(err) -> int:
+    """The HTTP status inside a gspread APIError, or 0 if it is some other error."""
+    resp = getattr(err, "response", None)
+    code = getattr(resp, "status_code", None)
+    if isinstance(code, int):
+        return code
+    # Some gspread versions carry it on the exception itself.
+    for attr in ("code", "status_code"):
+        v = getattr(err, attr, None)
+        if isinstance(v, int):
+            return v
+    return 0
+
+
+def with_retry(fn, what: str, tries: int = 5, base: float = 2.0):
+    """Run `fn`, retrying only the failures that retrying can fix.
+
+    Backs off 2s, 4s, 8s, 16s with a little jitter. A permission error, a missing
+    sheet or a bad key fails immediately -- waiting would not help and the run
+    should say so at once.
+    """
+    import random
+    import time
+
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 - re-raised below unless transient
+            status = _status_of(e)
+            if status not in TRANSIENT_STATUS or attempt == tries:
+                raise
+            wait = base ** attempt + random.uniform(0, 1)
+            print(f"   Google returned {status} on {what}; retrying in {wait:.0f}s "
+                  f"(attempt {attempt} of {tries - 1})")
+            time.sleep(wait)
+
+
 def service_account_info(sa_json: str) -> dict:
     """Parse GOOGLE_SA_JSON, which may be raw JSON or a path to a key file.
 
@@ -165,7 +208,7 @@ def open_spreadsheet(sheet_id: str, sa_json: str):
     key = normalise_sheet_id(sheet_id)
     gc = gspread.authorize(_load_credentials(sa_json))
     try:
-        return gc.open_by_key(key)
+        return with_retry(lambda: gc.open_by_key(key), f"opening the spreadsheet")
     except gspread.exceptions.SpreadsheetNotFound as e:
         # Google answers 404 both for "no such sheet" and for "you may not see it",
         # deliberately, so the raw error cannot tell them apart. Say what the two
@@ -464,7 +507,7 @@ def _apply_requests(ws, requests: list[dict]) -> None:
     if ss is None or not hasattr(ss, "batch_update"):
         return  # offline / fake worksheet: nothing to paint
     try:
-        ss.batch_update({"requests": requests})
+        with_retry(lambda: ss.batch_update({"requests": requests}), "applying formatting")
     except Exception as e:  # noqa: BLE001 - cosmetic; the values are already written
         print(f"   (could not apply row formatting on '{ws.title}': {e})")
 
@@ -678,11 +721,13 @@ def write_dataframe(ws, full: pd.DataFrame, header_raw: list[str],
     # no rule, which is why TRUE/FALSE was showing as text instead of a tickbox.
     boxed = apply_checkbox_validation(ws, checkbox_cols, 1, new_row_count)
 
-    ws.update(
+    # The one call that actually writes the month. A transient Google failure here
+    # used to lose the whole run; it is worth several attempts.
+    with_retry(lambda: ws.update(
         range_name="A1",
         values=matrix,
         value_input_option="USER_ENTERED",  # so TRUE/FALSE become checkboxes, dates parse
-    )
+    ), f"writing '{ws.title}'")
 
     # Value-clear leftover rows below the freshly written block (keeps formatting).
     if prev_row_count > new_row_count:

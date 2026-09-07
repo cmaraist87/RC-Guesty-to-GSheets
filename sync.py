@@ -476,7 +476,7 @@ def filter_to_cities(candidates: pd.DataFrame, cities) -> tuple[pd.DataFrame, di
     return candidates.loc[keep].reset_index(drop=True), removed
 
 
-def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
+def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
     print(f"Adapter produced {len(df_co)} check-out rows, {len(df_ci)} check-in rows.")
 
@@ -512,7 +512,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict) -> int:
                                read_row_marks, write_dataframe, create_month_tab,
                                accent_columns, highlight_columns,
                                clear_data_rows, read_checkbox_columns)
-    ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
+    ss = ss or open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     month_ws = month_worksheets(ss)
     if not month_ws:
         print("ERROR: no month-named tabs (e.g. 'Agosto 2026') found in the workbook. "
@@ -964,6 +964,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_config()
+    ss = None
 
     if args.scheduled:
         # Ask shared state whether today's run has happened, not the clock whether
@@ -1007,6 +1008,19 @@ def main(argv=None) -> int:
             print("ERROR: GUESTY_CLIENT_ID / GUESTY_CLIENT_SECRET not set. "
                   "Set them (or use --from-json) to run.", file=sys.stderr)
             return 2
+        # Open the workbook FIRST. Today's 503 arrived after a Guesty token had
+        # already been minted and two minutes spent fetching, and tokens are the
+        # scarcest thing here -- roughly five a day. If Google is down, find out
+        # before paying for data that cannot be written anywhere.
+        try:
+            ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
+        except Exception as e:  # noqa: BLE001
+            print(f"!! Could not open the spreadsheet: {e}", file=sys.stderr)
+            print("   No Guesty token was spent. Nothing was changed.", file=sys.stderr)
+            _note_summary("# Sync did NOT run" + chr(10) * 2
+                          + "The spreadsheet could not be opened, so no data was "
+                            "fetched and nothing was written.")
+            return 5
         reservations = fetch_from_guesty(cfg)
 
     describe_first(reservations)
@@ -1015,7 +1029,7 @@ def main(argv=None) -> int:
         # possibly stale dataset: diffing it would invent cancellations, and storing
         # it would destroy the baseline the next live run needs.
         record_reservation_snapshot(reservations, cfg, dry_run=args.dry_run)
-    rc = run(args.dry_run, reservations, cfg)
+    rc = run(args.dry_run, reservations, cfg, ss=ss)
     if args.scheduled and rc == 0:
         # Close the day only on success. A failed run leaves the claim open so a
         # later trigger retries rather than the whole day being lost.
