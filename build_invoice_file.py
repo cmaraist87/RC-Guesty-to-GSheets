@@ -70,7 +70,12 @@ MONEY = '"$"#,##0.00'
 # A percentage rather than a flat figure, deliberately. "15% family discount"
 # reads as a decision; "$984.38 off" reads as an arbitrary number somebody picked.
 # It also stays right if a line is added or removed later.
-DISCOUNT_LABEL = "Family discount — Phase 1 only"
+#
+# STANDING, not per-phase. The client's choice: this is a family relationship and
+# the discount is meant to hold across future work, so the label says nothing about
+# a phase. The Rate column still shows $125, so the standard rate stays on the
+# record -- which is what a referral reads, and what the next quote is anchored to.
+DISCOUNT_LABEL = "Family discount"
 DISCOUNT_MODE = "%"
 DISCOUNT_VALUE = 15
 
