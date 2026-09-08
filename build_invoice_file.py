@@ -67,12 +67,21 @@ ITEMS = [
 MONEY = '"$"#,##0.00'
 
 
-def build(path: str = OUT) -> str:
+# A percentage rather than a flat figure, deliberately. "15% family discount"
+# reads as a decision; "$984.38 off" reads as an arbitrary number somebody picked.
+# It also stays right if a line is added or removed later.
+DISCOUNT_LABEL = "Family discount — Phase 1 only"
+DISCOUNT_MODE = "%"
+DISCOUNT_VALUE = 15
+
+
+def build(path: str = OUT, label: str = DISCOUNT_LABEL,
+          mode: str = DISCOUNT_MODE, value: float = DISCOUNT_VALUE) -> str:
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
 
-    label = Font(name="Calibri", size=8, bold=True, color=FAINT)
+    label_font = Font(name="Calibri", size=8, bold=True, color=FAINT)
     body = Font(name="Calibri", size=11, color=INK)
     small = Font(name="Calibri", size=9, color=FAINT)
     top = Alignment(vertical="top", wrap_text=True)
@@ -95,21 +104,21 @@ def build(path: str = OUT) -> str:
     put("A2", "Software development & systems integration", small)
     for i, (k, v) in enumerate([("Invoice No", "RCI-2026-01"), ("Issued", "2026-09-06"),
                                 ("Due", "2026-09-21"), ("Terms", "Net 15")], start=1):
-        put(f"D{i}", k, label, right)
+        put(f"D{i}", k, label_font, right)
         put(f"E{i}", v)
 
-    put("A5", "FROM", label)
+    put("A5", "FROM", label_font)
     put("A6", "Christopher Maraist", Font(name="Calibri", size=12, bold=True, color=INK))
     put("A7", "chris.tektonpro@gmail.com")
     put("A8", f"{FILL} street, city, state, ZIP")
     put("A9", f"{FILL} phone")
 
-    put("C5", "BILL TO", label)
+    put("C5", "BILL TO", label_font)
     put("C6", "Ramos Cleaning, Inc.", Font(name="Calibri", size=12, bold=True, color=INK))
     put("C7", f"{FILL} street, city, state, ZIP")
     put("C8", f"{FILL} accounts payable contact")
 
-    put("A11", "PROJECT", label)
+    put("A11", "PROJECT", label_font)
     put("A12", "Guesty → Google Sheets automation", Font(name="Calibri", size=11, bold=True, color=INK))
     put("A13", "Nightly cleaning-schedule build across five markets · 2026-08-02 → 2026-09-04", small)
 
@@ -142,10 +151,11 @@ def build(path: str = OUT) -> str:
     put(f"D{R_SUB}", "Subtotal", bold_r, right)
     put(f"E{R_SUB}", f"=SUM(E{FIRST}:E{LAST})", bold_r, right, MONEY)
 
-    put(f"B{R_DISC}", "Discount", bold_r, right)
-    put(f"C{R_DISC}", "$", Font(name="Calibri", size=11, bold=True, color=ACCENT),
+    put(f"B{R_DISC}", label, bold_r, right)
+    put(f"C{R_DISC}", mode, Font(name="Calibri", size=11, bold=True, color=ACCENT),
         Alignment(horizontal="center"))
-    put(f"D{R_DISC}", 0, body, right, MONEY)
+    # A percentage is a plain number in this cell; a flat discount is money.
+    put(f"D{R_DISC}", value, body, right, "0.##\"%\"" if mode == "%" else MONEY)
     # Negative, so the total is a plain addition and the deduction reads as one.
     put(f"E{R_DISC}", f'=IF($C{R_DISC}="%",-$E{R_SUB}*$D{R_DISC}/100,-$D{R_DISC})',
         body, right, MONEY)
@@ -159,14 +169,14 @@ def build(path: str = OUT) -> str:
         c = put(f"{col}{R_DUE}", val, due_font, right, fmt, due_border)
         c.fill = due_fill
 
-    put(f"A{R_DUE + 2}", "PAYMENT", label)
+    put(f"A{R_DUE + 2}", "PAYMENT", label_font)
     for i, (k, v) in enumerate([("Payable to", "Christopher Maraist"),
                                 ("Method", f"{FILL} bank transfer / check / Zelle"),
                                 ("Reference", "RCI-2026-01")]):
         put(f"A{R_DUE + 3 + i}", k, small)
         put(f"B{R_DUE + 3 + i}", v)
 
-    put(f"A{R_DUE + 7}", "NOT INCLUDED", label)
+    put(f"A{R_DUE + 7}", "NOT INCLUDED", label_font)
     n = put(f"A{R_DUE + 8}",
             "Work on the Connecteam job-scheduling integration is under way and is "
             "deliberately excluded here. It will be billed separately once jobs are live "
@@ -202,9 +212,48 @@ def build(path: str = OUT) -> str:
     return path
 
 
-if __name__ == "__main__":
-    out = build(sys.argv[1] if len(sys.argv) > 1 else OUT)
+def main(argv=None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out", nargs="?", default=OUT)
+    ap.add_argument("--discount", default=f"{DISCOUNT_VALUE}%",
+                    help='e.g. "15%%" for a percentage, or "1562.50" for a flat amount.')
+    ap.add_argument("--discount-label", default=DISCOUNT_LABEL)
+    args = ap.parse_args(argv)
+
+    raw = str(args.discount).strip()
+    mode = "%" if raw.endswith("%") else "$"
+    try:
+        value = float(raw.rstrip("%$").replace(",", "").strip() or 0)
+    except ValueError:
+        print(f"ERROR: could not read --discount {args.discount!r}", file=sys.stderr)
+        return 2
+
+    try:
+        out = build(args.out, label=args.discount_label, mode=mode, value=value)
+    except PermissionError:
+        # Excel holds an exclusive lock on an open workbook. Say so, rather than
+        # showing a zipfile traceback for what is really "close the file".
+        print(f"ERROR: '{args.out}' is open in Excel, so it cannot be rewritten.",
+              file=sys.stderr)
+        print("       Close it and run this again, or pass a different filename.",
+              file=sys.stderr)
+        return 3
+    sub_total = sum(h * r for _, _, h, r in ITEMS)
+    off = sub_total * value / 100 if mode == "%" else value
+    due = max(0.0, sub_total - off)
     print(f"Wrote {out}")
+    print(f"  Subtotal            ${sub_total:,.2f}")
+    print(f"  {args.discount_label:<18}  -${off:,.2f}  ({raw})")
+    print(f"  AMOUNT DUE          ${due:,.2f}")
+    print()
     print(f"  line items  rows {FIRST}-{LAST}  (type into a blank row to add, delete a row to remove)")
     print(f"  discount    row {R_DISC}: $ or % in column C, the figure in column D")
     print(f"  amount due  row {R_DUE}, calculated")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
