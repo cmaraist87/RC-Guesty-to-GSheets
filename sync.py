@@ -1013,6 +1013,10 @@ def main(argv=None) -> int:
         # scarcest thing here -- roughly five a day. If Google is down, find out
         # before paying for data that cannot be written anywhere.
         try:
+            # Imported here, not at module scope: sheets_client pulls in gspread and
+            # google-auth, and the tests import sync without either installed.
+            from sheets_client import open_spreadsheet
+
             ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
         except Exception as e:  # noqa: BLE001
             print(f"!! Could not open the spreadsheet: {e}", file=sys.stderr)
