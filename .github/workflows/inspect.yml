@@ -1,0 +1,53 @@
+name: Inspect the sheet (read-only)
+
+# Read-only diagnostics. Nothing here writes to the Google Sheet and nothing calls
+# Guesty, so no token is spent and the daily quota is untouched.
+#
+# Exists because these scripts need the Sheets service-account key, which lives in
+# Actions secrets and not on anyone's laptop.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: "What to look at"
+        required: true
+        default: stale_moves
+        type: choice
+        options:
+          - stale_moves       # struck rows whose booking is still live elsewhere
+          - list_tabs         # every tab, its size and layout
+      scope:
+        description: "stale_moves: months to check"
+        required: true
+        default: current-and-later
+        type: choice
+        options:
+          - current-and-later
+          - all
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements-sync.txt
+
+      - name: Run
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
+          WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
+        run: |
+          if [ "${{ inputs.tool }}" = "stale_moves" ]; then
+            ARGS=""
+            if [ "${{ inputs.scope }}" = "all" ]; then ARGS="--all"; fi
+            python -u stale_moves.py $ARGS
+          else
+            python -u list_tabs.py
+          fi
