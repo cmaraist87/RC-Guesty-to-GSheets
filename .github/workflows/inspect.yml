@@ -16,6 +16,7 @@ on:
         type: choice
         options:
           - stale_moves       # struck rows whose booking is still live elsewhere
+          - bad_units         # rows named with an invented unit (427 Gravier 002)
           - list_tabs         # every tab, its size and layout
       scope:
         description: "stale_moves: months to check"
@@ -44,10 +45,10 @@ jobs:
           SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
           WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
         run: |
-          if [ "${{ inputs.tool }}" = "stale_moves" ]; then
-            ARGS=""
-            if [ "${{ inputs.scope }}" = "all" ]; then ARGS="--all"; fi
-            python -u stale_moves.py $ARGS
-          else
-            python -u list_tabs.py
-          fi
+          ARGS=""
+          if [ "${{ inputs.scope }}" = "all" ]; then ARGS="--all"; fi
+          case "${{ inputs.tool }}" in
+            stale_moves) python -u stale_moves.py $ARGS ;;
+            bad_units)   python -u bad_units.py $ARGS ;;
+            *)           python -u list_tabs.py ;;
+          esac
