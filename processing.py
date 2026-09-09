@@ -66,6 +66,28 @@ def _canonical_key(prop: str) -> str:
 _EXCLUDE_KEYS = {_canonical_key(p) for p in EXCLUDE_PROPERTIES}
 
 
+def _continue_unit_numbers(units: list[str]) -> list[str]:
+    """"203&4&5" -> 203, 204, 205.
+
+    Guesty names a combined listing by its first unit followed only by the digits
+    that CHANGE: "31 Con 203&4" is units 203 and 204, and the "4" is shorthand for
+    "the next one along", not a unit called 4. A short fragment therefore continues
+    the number before it, taking its leading digits.
+
+    This used to zero-pad instead, which invented "31 Congress 004" -- a unit that
+    does not exist, has no entry in property_to_city.csv, and reached the team's
+    sheet as a cleaning job for a real day.
+
+    A fragment as long as the one before it is already a whole unit number and is
+    left alone, so "201&202" and "1&2" are unaffected.
+    """
+    out = [units[0]]
+    for u in units[1:]:
+        prev = out[-1]
+        out.append(prev[:len(prev) - len(u)] + u if len(u) < len(prev) else u)
+    return out
+
+
 def normalize_property(listing: str) -> list:
     raw = listing.split('/')[0].strip()
 
@@ -133,13 +155,11 @@ def normalize_property(listing: str) -> list:
             num2 = num1[:len(num1) - len(num2)] + num2
         return [f"{num1} {street}", f"{num2} {street}"]
 
-    # "422 Gravier 201&202": digit unit list after street name
+    # "422 Gravier 201&202" / "31 Con 203&4": digit unit list after street name
     match = re.match(r'^(.*?\d+\s+\w+)\s+([\d]+(?:&[\d]+)+)$', raw)
     if match:
-        base    = match.group(1)
-        units   = match.group(2).split('&')
-        ref_len = len(units[0])
-        return [f"{base} {u.zfill(ref_len)}" for u in units]
+        base = match.group(1)
+        return [f"{base} {u}" for u in _continue_unit_numbers(match.group(2).split('&'))]
 
     # "1229 Dela A&B": letter unit list after address
     match = re.match(r'^(.+)\s+([A-Z](?:&[A-Z])+)$', raw)

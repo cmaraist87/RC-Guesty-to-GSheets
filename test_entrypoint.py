@@ -32,11 +32,22 @@ class FakeStore:
 
 def _patched(open_spreadsheet, store=None, fetch=None):
     """Run main(['--scheduled']) with the network stubbed, and return its code."""
+    import datetime as _dt
+
+    import daily_gate
     import sheets_client
+
+    # Pin the clock inside the gate's window. Without this the whole file passes
+    # before noon Chicago and fails after it, which is worse than no test at all:
+    # it went green all morning and only broke when the afternoon suite ran.
+    # The gate's own behaviour is covered by test_daily_gate.
+    morning = _dt.datetime(2026, 9, 9, 4, 30, tzinfo=daily_gate.TZ)
+    real_should_run = daily_gate.should_run
 
     real = (sheets_client.open_spreadsheet, sync.state_store,
             sync.fetch_from_guesty, sync.run, sync.load_config)
     sheets_client.open_spreadsheet = open_spreadsheet
+    daily_gate.should_run = lambda st, now=None, **kw: real_should_run(st, now=morning, **kw)
     sync.state_store = lambda cfg: FakeStore() if store is None else store
     sync.fetch_from_guesty = fetch or (lambda cfg: [])
     sync.run = lambda dry, res, cfg, ss=None: 0
@@ -45,6 +56,7 @@ def _patched(open_spreadsheet, store=None, fetch=None):
     try:
         return sync.main(["--scheduled"])
     finally:
+        daily_gate.should_run = real_should_run
         (sheets_client.open_spreadsheet, sync.state_store,
          sync.fetch_from_guesty, sync.run, sync.load_config) = real
 
