@@ -246,6 +246,7 @@ def merge_reservations_into_sheet(
     out_of_scope_properties: dict | None = None,
     delete_out_of_scope: bool = False,
     collapse_duplicates: bool = False,
+    live_by_code_all: dict | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -260,6 +261,14 @@ def merge_reservations_into_sheet(
         where it moved to, highlighted, carrying its ticks -- a move is not a
         cancellation and must not be counted as one. It also does not inflate the
         short-fetch guard, because a move proves the fetch carried that reservation.
+
+    live_by_code_all : {confirmation code -> [(Property, Date), ...]} across EVERY
+        month being written, not just this tab's. A booking whose date shifts over a
+        month boundary (30 Sep -> 1 Oct) disappears from this tab's `candidates`
+        entirely, and without this it reads as a cancellation. Consulted only when
+        the booking has no live slot left in this month at all, so a multi-unit
+        listing losing one unit is still counted as the cancellation it is.
+        Optional: omit it and cross-month moves simply go undetected, as before.
     struck_rows : 0-based positions of `sheet` rows an earlier run already struck
         through. They are excluded from matching (a re-booking must land as a new
         row) and are not re-reported as cancellations.
@@ -358,12 +367,18 @@ def merge_reservations_into_sheet(
     # move changes the (Property, Date) key, so the code is the only thread back to
     # the row the booking is leaving -- which is how its ticks follow it across.
     sheet_by_code: dict[str, list[int]] = {}
+    # The SLOTS the sheet holds for each code, as opposed to any row at that slot.
+    # The move test needs "does the sheet already have THIS BOOKING here", which is
+    # a different question from "is any row sitting here" -- see below.
+    sheet_keys_by_code: dict[str, set] = {}
     for i, r in sheet.iterrows():
         if i in struck_rows:
             continue
         code = str(r.get("Confirmation Code", "")).strip().upper()
         if code:
             sheet_by_code.setdefault(code, []).append(i)
+            sheet_keys_by_code.setdefault(code, set()).add(
+                (str(r["Property"]).strip(), _date_key(r["Date"])))
 
     def _rec(row) -> dict:
         return {
@@ -473,17 +488,35 @@ def merge_reservations_into_sheet(
             in_window += 1
             if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
                 cancelled_pos.add(i)
-                # A MOVE, not a cancellation -- but only if the booking now sits at a
-                # slot the sheet does not already hold a row for.
+                # A MOVE, not a cancellation -- the booking is still live, at a slot
+                # THIS BOOKING did not previously occupy.
                 #
                 # Multi-unit listings share one confirmation code: "402 W Hall" and
                 # "404 W Hall" are both HMCQ45A53A. If 402's half is cancelled while
-                # 404's stands, the code is still "live" and the old test called that
-                # a move. It is not -- 402 really was cancelled, and treating it as a
-                # move would delete a genuine cancellation from the month's count.
+                # 404's stands, the code is still "live" but every slot it occupies
+                # is one the sheet already had it in, so nothing moved -- 402 really
+                # was cancelled, and calling it a move would delete a genuine
+                # cancellation from the month's count.
+                #
+                # This used to ask whether ANY ROW existed at the destination, which
+                # is a different question and got two cases wrong on 2026-09-09:
+                #
+                #   Taylor Eshmont moved 31 Congress 301 -> 406 W Hall on 09-13, a
+                #   slot that already held a different guest's row, so the move was
+                #   invisible and both his old rows were struck as cancellations.
+                #
+                #   Lareina Kostenchuk's checkout slid 09-30 -> 10-01. Her booking
+                #   left this tab's month entirely, so `live_by_code` (this month's
+                #   candidates) could not see it and her row was struck too.
+                #
+                # Hence: compare against the slots the sheet holds FOR THIS CODE, and
+                # when the booking has left this month altogether, look at every
+                # month's candidates rather than only this tab's.
                 code = str(r["Confirmation Code"]).strip().upper()
-                if any(dest not in existing_by_key
-                       for dest in live_by_code.get(code, [])):
+                here = live_by_code.get(code, [])
+                dests = here if here else (live_by_code_all or {}).get(code, [])
+                mine = sheet_keys_by_code.get(code, frozenset())
+                if any(dest not in mine for dest in dests):
                     moved_pos.add(i)
 
         # The guard exists to catch a SHORT FETCH, where reservations vanish from the
@@ -654,8 +687,14 @@ def merge_reservations_into_sheet(
     moved_records = []
     for i in sorted(moved_pos):
         rec = _struck_rec(i)
-        prop, day = _nearest_destination(
-            live_by_code[rec["Confirmation Code"].upper()], rec["Date"])
+        code = rec["Confirmation Code"].upper()
+        # Same source the move was decided from: a booking that left this month
+        # entirely has no entry in live_by_code, and reporting it must not be the
+        # thing that fails.
+        dests = live_by_code.get(code) or (live_by_code_all or {}).get(code) or []
+        if not dests:
+            continue
+        prop, day = _nearest_destination(dests, rec["Date"])
         rec["Now at"] = f"{prop}  {day}"
         moved_records.append(rec)
 

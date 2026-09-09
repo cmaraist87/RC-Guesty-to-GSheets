@@ -571,6 +571,21 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
     snapshots = []
     n_written = 0
 
+    # Every slot each booking occupies across ALL months. A tab's own merge only ever
+    # sees its own month, so a booking whose date shifts over a month boundary looks
+    # to the month it left exactly like a cancellation -- which is what struck
+    # Lareina Kostenchuk's 30 Sep row on 2026-09-09 when her checkout moved to 1 Oct.
+    from sheet_merge import _date_key as _dkey
+
+    live_by_code_all: dict[str, list] = {}
+    for _code, _prop, _date in zip(candidates.get("Confirmation Code", []),
+                                   candidates.get("Property", []),
+                                   candidates.get("Date", [])):
+        _code = str(_code).strip().upper()
+        if _code:
+            live_by_code_all.setdefault(_code, []).append(
+                (str(_prop).strip(), _dkey(_date)))
+
     for ym, grp in candidates.groupby("_ym"):
         y, mth = int(ym[:4]), int(ym[5:7])
         cand = grp.drop(columns=["_ym"]).reset_index(drop=True)
@@ -638,6 +653,7 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
                 validated_checkboxes=cb_cols or None,
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
                 out_of_scope_properties=out_of_scope_props,
+                live_by_code_all=live_by_code_all,
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
