@@ -248,6 +248,7 @@ def merge_reservations_into_sheet(
     delete_out_of_scope: bool = False,
     collapse_duplicates: bool = False,
     live_by_code_all: dict | None = None,
+    history_before: str | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -262,6 +263,12 @@ def merge_reservations_into_sheet(
         where it moved to, highlighted, carrying its ticks -- a move is not a
         cancellation and must not be counted as one. It also does not inflate the
         short-fetch guard, because a move proves the fetch carried that reservation.
+
+    history_before : ISO date -- the first day the Guesty fetch covers. An existing
+        row dated before it is never rewritten, because the fetch no longer carries
+        every reservation touching that day and an "update" would replace a
+        complete row with a partial one. Rows may still be added for such dates.
+        None disables the guard.
 
     live_by_code_all : {confirmation code -> [(Property, Date), ...]} across EVERY
         month being written, not just this tab's. A booking whose date shifts over a
@@ -423,6 +430,22 @@ def merge_reservations_into_sheet(
             new_records.append(_rec(c)); continue
         csig = sig(c, "Check-out Time", "Check-in Time")
         if any(m["sig"] == csig for m in matches):
+            n_unchanged += 1; continue
+        # A row dated before the fetch window is HISTORY and must not be rewritten.
+        #
+        # The fetch asks for checkOut >= that date, so a stay that ended before it
+        # is no longer carried at all -- but a LATER booking checking in that same
+        # day still is, and it produces a candidate for the same (Property, Date).
+        # Rewriting the row from that candidate replaces a completed turnover with
+        # a check-in only, silently erasing the departure clean.
+        #
+        # That is what emptied the checkout time on 17 rows dated 7 September once
+        # the window moved past them on 9 September, and the client read the result
+        # as jobs that had never reached the sheet at all.
+        #
+        # A row can still be ADDED for such a date -- adding what the fetch does
+        # carry takes nothing away. Only overwriting is refused.
+        if history_before and _date_key(c["Date"]) < history_before:
             n_unchanged += 1; continue
         # EVERY match is dropped in favour of this one row (see delete_rows below),
         # so the ticks of all of them have to be carried, not just the first one's.

@@ -525,7 +525,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
     template_title = cfg["template_tab"] or month_ws[max(month_ws.keys())].title
     print(f"Template tab for auto-creating missing months: '{template_title}'")
 
-    cancel_window = coverage_window(cfg) if cfg.get("mark_cancelled", True) else None
+    # The fetch's own span, kept whether or not cancellation detection is on:
+    # the merge needs it to know which rows predate the data it was given.
+    coverage = coverage_window(cfg)
+    cancel_window = coverage if cfg.get("mark_cancelled", True) else None
     if cancel_window:
         print(f"Cancellation detection ON for dates {cancel_window[0]} .. {cancel_window[1]}, "
               "further narrowed to each tab's own month (rows outside are never struck).")
@@ -654,6 +657,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
                 allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES),
                 out_of_scope_properties=out_of_scope_props,
                 live_by_code_all=live_by_code_all,
+                # Freeze anything older than the fetch itself -- see the merge.
+                history_before=(coverage[0] if coverage else None),
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
