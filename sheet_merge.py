@@ -14,7 +14,8 @@ Returns:
   stats   : dict of counts (new / updated / unchanged / removed / cancelled / missing_city).
   changes : the records behind those counts, plus the two lists the caller needs to
             paint the sheet -- `row_flags` (one flag per row of `full`) and
-            `kept_positions` (where each carried-over row sat in the old sheet).
+            `kept_positions` (for each OUTPUT row, where it sat in the old
+            sheet, or None if this run appended it -- aligned to the frame).
 
 Row flags drive the visual diff the ops team asked for:
     "new" / "updated"  -> highlighted (this run wrote the row)
@@ -635,6 +636,10 @@ def merge_reservations_into_sheet(
     # Where each carried-over row sat in the old sheet -- lets the writer tell an
     # already-highlighted row from one it must newly paint.
     kept_positions = [int(i) for i in kept_existing.index]
+    # Where each OUTPUT row came from in the old sheet, None for one this run
+    # appended. Aligned to `full` and carried through the sort below, so a caller
+    # can still find where a given sheet row ended up once the tab is reordered.
+    origin: list = list(kept_positions) + [None] * len(append_flags)
     row_flags = ["moved" if p in moved_pos
                  else "cancelled" if p in cancelled_pos
                  else "struck" if p in struck_rows
@@ -645,6 +650,37 @@ def merge_reservations_into_sheet(
             if len(kept_existing) else to_append.copy())
     full = full.reindex(columns=target_cols).fillna("")
     assert len(row_flags) == len(full), (len(row_flags), len(full))
+
+    # Put the tab back in date order.
+    #
+    # New and updated rows are APPENDED above, so without this every row the sync
+    # touches sinks to the bottom and the month drifts out of order a little more
+    # each morning. By 2026-09-10 Septiembre's 7 September jobs were scattered over
+    # five blocks -- 52 rows in place and 40 more stranded as far down as row 1177
+    # of 1219 -- and the team, reading the September 7 section, reported the
+    # stranded ones to the client as never having reached the sheet.
+    #
+    # Same key processing.py sorts the incoming rows by, so a tab already in order
+    # does not move. The sort is stable, so rows sharing a key keep their relative
+    # order, and row_flags is carried through it -- the marks are painted from
+    # these flags by position, so they must travel with their rows.
+    #
+    # A row whose date cannot be read sinks to the bottom rather than being dropped
+    # or silently reordered among real dates.
+    if len(full):
+        has_city = "City" in full.columns
+        order = sorted(
+            range(len(full)),
+            key=lambda i: (_date_key(full.iat[i, full.columns.get_loc("Date")])
+                           or "9999-99-99",
+                           str(full.iat[i, full.columns.get_loc("City")]).strip()
+                           if has_city else "",
+                           str(full.iat[i, full.columns.get_loc("Property")]).strip()),
+        )
+        if order != list(range(len(full))):
+            full = full.iloc[order].reset_index(drop=True)
+            row_flags = [row_flags[i] for i in order]
+            origin = [origin[i] for i in order]
 
     missing_city = int(
         (to_append.get("City", pd.Series(dtype=str)).astype(str).str.strip() == "").sum()
@@ -725,6 +761,6 @@ def merge_reservations_into_sheet(
         "missing_city_properties": missing_city_props,
         # Painting instructions for the writer (see the module docstring).
         "row_flags": row_flags,
-        "kept_positions": kept_positions,
+        "kept_positions": origin,
     }
     return full, stats, changes

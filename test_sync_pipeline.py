@@ -251,7 +251,12 @@ def test_reassignment_is_reported_as_moved_not_cancelled():
     # moved to, highlighted. Only the vanished booking keeps a line through it, so
     # counting struck rows at month end counts cancellations and nothing else.
     assert "moved" not in changes["row_flags"], changes["row_flags"]
-    assert changes["row_flags"][0] == "cancelled", changes["row_flags"]
+    # Which ROW carries the flag, not which position: the tab is written in date
+    # order, so the struck row's index moves when the appended rows sort in around
+    # it. Asserting on the guest is what this test actually means.
+    struck_at = [i for i, f in enumerate(changes["row_flags"]) if f == "cancelled"]
+    assert len(struck_at) == 1, changes["row_flags"]
+    assert full.iloc[struck_at[0]]["Guest"] == "Ghost Booking", full.to_string()
     assert not any(r["Property"] == "3930 Burgundy" for _, r in full.iterrows()),         full.to_string()
     assert len(full) == 4, full.to_string()   # 1 kept + 3 appended
     print("OK: reassignment moves the row rather than striking it as a cancellation")
