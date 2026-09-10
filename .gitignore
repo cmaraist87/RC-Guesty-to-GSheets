@@ -33,3 +33,8 @@ inputs/*.csv
 _archive/
 *.png
 *.xlsx
+
+# Personal/scratch files -- not part of the sync
+Invoice *.pdf
+Invoice *.xlsx
+reservation_test.ipynb
