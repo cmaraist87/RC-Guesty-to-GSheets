@@ -1,7 +1,9 @@
-name: Inspect the sheet (read-only)
+name: Inspect the sheet
 
-# Read-only diagnostics. Nothing here writes to the Google Sheet and nothing calls
-# Guesty, so no token is spent and the daily quota is untouched.
+# Diagnostics. Nothing here calls Guesty, so no token is spent and the daily quota
+# is untouched. Everything is read-only EXCEPT bad_units with `write` ticked, which
+# rewrites the Property cell of rows carrying an invented unit number -- that one
+# column, on those rows, and nothing else.
 #
 # Exists because these scripts need the Sheets service-account key, which lives in
 # Actions secrets and not on anyone's laptop.
@@ -18,8 +20,13 @@ on:
           - stale_moves       # struck rows whose booking is still live elsewhere
           - bad_units         # rows named with an invented unit (427 Gravier 002)
           - list_tabs         # every tab, its size and layout
+      write:
+        description: "bad_units ONLY: actually WRITE the corrected property names"
+        required: false
+        default: false
+        type: boolean
       scope:
-        description: "stale_moves: months to check"
+        description: "months to check"
         required: true
         default: current-and-later
         type: choice
@@ -49,6 +56,8 @@ jobs:
           if [ "${{ inputs.scope }}" = "all" ]; then ARGS="--all"; fi
           case "${{ inputs.tool }}" in
             stale_moves) python -u stale_moves.py $ARGS ;;
-            bad_units)   python -u bad_units.py $ARGS ;;
+            bad_units)
+              if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
+              python -u bad_units.py $ARGS ;;
             *)           python -u list_tabs.py ;;
           esac
