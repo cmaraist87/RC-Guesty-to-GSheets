@@ -33,7 +33,7 @@ import sys
 from collections import defaultdict
 
 from sheets_client import (month_worksheets, open_spreadsheet, read_as_dataframe,
-                           read_row_marks)
+                           read_row_marks, with_retry)
 from sync import _today_chicago, load_config
 
 
@@ -41,34 +41,66 @@ def norm(s) -> str:
     return str(s or "").strip()
 
 
-def describe(struck_row, live_rows) -> tuple[str, str]:
-    """(signal, detail) for one struck row against the live rows sharing its code.
+def pair_history(rows) -> dict:
+    """How many DISTINCT confirmation codes each pair of properties has shared.
 
-    Deliberately DESCRIPTIVE, not a verdict. A reassignment and one unit of a
-    multi-unit booking cancelling are structurally identical -- same code, same
-    date, a different property -- so any confident label here would be a guess
-    wearing a uniform. What can be said honestly is how far the booking moved, and
-    that is what a person needs in order to judge.
+    This is the evidence that separates the two cases a struck row cannot be read
+    from on its own.
+
+    A combined listing books its units together every single time, so its
+    properties share dozens of codes over a month -- "704 N 2nd" and "706 N 2nd"
+    are one booking, and one unit cancelling while the other stands is a REAL
+    cancellation that must keep its line.
+
+    A reassignment is a one-off: Guesty moved this booking from one property to
+    another, and those two addresses have no other history together.
+
+    Guessing from the address text cannot tell them apart. 704 and 706 N 2nd read
+    as "different addresses" and would be deleted as a move; they are nothing of
+    the kind.
     """
+    from collections import defaultdict
+
+    by_code = defaultdict(set)
+    for _, r in rows.iterrows():
+        code = norm(r.get("Confirmation Code")).upper()
+        prop = norm(r.get("Property"))
+        if code and prop:
+            by_code[code].add(prop)
+
+    pairs = defaultdict(set)
+    for code, props in by_code.items():
+        ps = sorted(props)
+        for i, x in enumerate(ps):
+            for y in ps[i + 1:]:
+                pairs[(x, y)].add(code)
+    return {k: len(v) for k, v in pairs.items()}
+
+
+def classify(struck_row, live_rows, pairs) -> tuple[str, str]:
+    """(verdict, why) for one struck row. Verdict is 'move', 'cancellation' or
+    'unclear' -- only 'move' is ever safe to delete."""
     s_prop, s_date = norm(struck_row.get("Property")), norm(struck_row.get("Date"))
-    dates = {norm(r.get("Date")) for r in live_rows}
-    props = {norm(r.get("Property")) for r in live_rows}
-    where = ", ".join(sorted(f"{p} on {d}"
-                             for p in props for d in dates
-                             for r in live_rows
-                             if norm(r.get("Property")) == p and norm(r.get("Date")) == d))
+    dests = [(norm(r.get("Property")), norm(r.get("Date"))) for r in live_rows]
+    where = ", ".join(sorted(f"{p} on {d}" for p, d in dests))
 
-    if s_date not in dates:
-        # The booking is live on a different DAY. Nothing about a multi-unit listing
-        # produces that -- its units are cleaned the same day -- so this is a move.
-        return ("MOVED TO ANOTHER DAY", f"now at {where}")
+    if s_date not in {d for _p, d in dests}:
+        # Live on a different DAY. A combined listing's units are cleaned the same
+        # day, so nothing about one produces this. Unambiguous.
+        return ("move", f"live on another day -- now at {where}")
 
-    # Same day, different property. Could be a reassignment, or could be one unit of
-    # a combined listing that stopped being part of the booking. Only somebody who
-    # knows the properties can say which.
-    return ("SAME DAY, DIFFERENT PROPERTY",
-            f"also live at {where} — a reassignment, or one unit of a combined "
-            f"listing dropping out")
+    # Same day, different property. Ask what these two addresses have done together.
+    others = [p for p, d in dests if d == s_date and p != s_prop]
+    shared = max((pairs.get(tuple(sorted((s_prop, o))), 0) for o in others),
+                 default=0)
+    if shared > 1:
+        return ("cancellation",
+                f"{s_prop} and {others[0]} share {shared} bookings -- a combined "
+                f"listing, so this unit really was cancelled")
+    if shared == 1:
+        return ("move", f"{s_prop} and {others[0]} share only this one booking -- "
+                        f"a reassignment; now at {where}")
+    return ("unclear", f"no shared history with {where}")
 
 
 def main(argv=None) -> int:
@@ -76,6 +108,9 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--all", action="store_true",
                     help="Include months that have already ended (default: current month on).")
+    ap.add_argument("--fix", action="store_true",
+                    help="DELETE the rows proved to be moves. Cancellations and "
+                         "anything unclear are always left alone.")
     args = ap.parse_args(argv)
 
     cfg = load_config()
@@ -92,6 +127,7 @@ def main(argv=None) -> int:
         return 0
 
     grand = defaultdict(int)
+    deleted: dict = {}
     for key in wanted:
         ws = tabs[key]
         rows, _ = read_as_dataframe(ws)
@@ -99,6 +135,7 @@ def main(argv=None) -> int:
         if not len(rows):
             continue
 
+        pairs = pair_history(rows)
         by_code = defaultdict(list)
         for i, r in rows.iterrows():
             code = norm(r.get("Confirmation Code")).upper()
@@ -113,8 +150,8 @@ def main(argv=None) -> int:
             code = norm(r.get("Confirmation Code")).upper()
             if not code or code not in by_code:
                 continue           # nothing live under this code: a real cancellation
-            verdict, why = describe(r, by_code[code])
-            found.append((i + 2, r, verdict, why))
+            verdict, why = classify(r, by_code[code], pairs)
+            found.append((i, i + 2, r, verdict, why))
             grand[verdict] += 1
 
         print(f"\n{ws.title}: {len(struck)} struck row(s), "
@@ -122,11 +159,22 @@ def main(argv=None) -> int:
         if not found:
             print("  Nothing suspect -- every struck row's booking is genuinely gone.")
             continue
-        for grid_row, r, verdict, why in found:
+        for _pos, grid_row, r, verdict, why in found:
             print(f"  row {grid_row:<5} {norm(r.get('Date')):<11} "
                   f"{norm(r.get('Property'))[:26]:<26} {norm(r.get('Guest'))[:22]:<22} "
                   f"{norm(r.get('Confirmation Code'))}")
-            print(f"      {verdict}: {why}")
+            print(f"      {verdict.upper()}: {why}")
+
+        if args.fix:
+            # Bottom-up: deleting a row shifts every row under it.
+            doomed = sorted((g for _p, g, _r, v, _w in found if v == "move"),
+                            reverse=True)
+            for grid_row in doomed:
+                with_retry(lambda gr=grid_row: ws.delete_rows(gr),
+                           f"deleting row {grid_row} of '{ws.title}'")
+            deleted[ws.title] = len(doomed)
+            print(f"   -> deleted {len(doomed)} row(s) proved to be moves; "
+                  f"left {len(found) - len(doomed)} alone.")
 
     print("\n" + "=" * 66)
     if not grand:
@@ -135,16 +183,21 @@ def main(argv=None) -> int:
     for verdict, n in sorted(grand.items()):
         print(f"  {n:>4}  {verdict}")
     print("=" * 66)
-    print("  MOVED TO ANOTHER DAY is safe to un-strike or delete: the booking is")
-    print("  still on the sheet on a different day, so the line through the old row")
-    print("  counts a cancellation that never happened.")
+    print("  MOVE        the booking is live elsewhere and these two addresses have")
+    print("              no other history together. The line counts a cancellation")
+    print("              that never happened -- safe to delete.")
     print("")
-    print("  SAME DAY, DIFFERENT PROPERTY needs your eye. A reassignment and one unit")
-    print("  of a combined listing dropping out look identical from here, and only")
-    print("  one of them should keep its line. Check the property pair: units of the")
-    print("  same building are the second case, and should stay struck.")
+    print("  CANCELLATION  the two properties are booked together again and again:")
+    print("              a combined listing. One unit dropping out IS a cancellation")
+    print("              and keeps its line.")
     print("")
-    print("  Nothing here was changed.")
+    print("  UNCLEAR     left alone; needs a person.")
+    print("")
+    if args.fix:
+        print(f"  Deleted {sum(deleted.values())} row(s): "
+              + ", ".join(f"{t} {n}" for t, n in deleted.items() if n))
+    else:
+        print("  Nothing was changed. Re-run with --fix to delete the MOVE rows.")
     return 0
 
 

@@ -22,7 +22,7 @@ on:
           - date_rows         # every row the sheet holds for one date
           - list_tabs         # every tab, its size and layout
       write:
-        description: "bad_units ONLY: actually WRITE the corrected property names"
+        description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
         required: false
         default: false
         type: boolean
@@ -61,7 +61,9 @@ jobs:
           ARGS=""
           if [ "${{ inputs.scope }}" = "all" ]; then ARGS="--all"; fi
           case "${{ inputs.tool }}" in
-            stale_moves) python -u stale_moves.py $ARGS ;;
+            stale_moves)
+              if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
+              python -u stale_moves.py $ARGS ;;
             bad_units)
               if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
               python -u bad_units.py $ARGS ;;
