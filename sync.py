@@ -241,6 +241,9 @@ def record_reservation_snapshot(reservations: list[dict], cfg: dict,
     # Tonight's coverage, so a reservation that merely aged out of the sliding
     # fetch window is not announced as a cancellation.
     d = diff(before, after, window=coverage_window(cfg))
+    # A first run has no baseline: everything reads as "added" and nothing as
+    # "gone", so the reconciliation check below must not judge against it.
+    d["had_baseline"] = bool(before)
     print()
     print(format_report(d, taken_at=taken_at))
     if dry_run:
@@ -476,7 +479,53 @@ def filter_to_cities(candidates: pd.DataFrame, cities) -> tuple[pd.DataFrame, di
     return candidates.loc[keep].reset_index(drop=True), removed
 
 
-def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
+def _reconciles(struck_codes: set[str], snap_diff: dict | None) -> bool:
+    """Did this run strike more BOOKINGS than Guesty actually lost?
+
+    The month's cancellation count is the number the client audits, and the only
+    way it goes wrong is a row struck for a booking that did not cancel. Guesty's
+    own figure for that is in the snapshot: `gone` -- reservations present last
+    night, absent tonight, and still inside the fetch window.
+
+    Rows are not reservations. One cancelled booking strikes a check-out row and a
+    check-in row, and a combined listing multiplies both, so the ROW count is
+    legitimately several times `gone`. What can never legitimately exceed it is the
+    number of DISTINCT confirmation codes struck -- each is one booking, and each
+    must be one Guesty lost.
+
+    On 2026-09-09 this would have fired: Guesty lost 2 reservations and the sheet
+    struck 4 codes, the extra two being Taylor Eshmont and Lareina Kostenchuk, both
+    of whom had merely moved. It stayed wrong for two days because nothing compared
+    the two numbers, and the client found it before we did.
+
+    Silent when there is no baseline to compare against.
+    """
+    if not snap_diff or not snap_diff.get("had_baseline"):
+        return True
+    gone = snap_diff.get("counts", {}).get("gone", 0)
+    if len(struck_codes) <= gone:
+        return True
+    print()
+    print("!" * 60)
+    print("  CANCELLATION COUNT DOES NOT RECONCILE")
+    print(f"    Guesty lost {gone} reservation(s) since the last run.")
+    print(f"    This run struck {len(struck_codes)} distinct booking(s).")
+    print("")
+    print("    A booking can only be struck if Guesty lost it. Striking more than")
+    print("    that means rows were marked cancelled for bookings that are still")
+    print("    live -- almost always a reassignment read as a cancellation.")
+    print("")
+    print("    The sheet HAS been written. Check the Moved and Cancelled lists")
+    print("    above: a guest in both, or one whose booking you can still find at")
+    print("    another property or date, is the one to look at.")
+    print("!" * 60)
+    print("::error::Cancellation count does not reconcile: "
+          f"{len(struck_codes)} booking(s) struck, Guesty lost {gone}.")
+    return False
+
+
+def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
+        snap_diff: dict | None = None) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
     print(f"Adapter produced {len(df_co)} check-out rows, {len(df_ci)} check-in rows.")
 
@@ -557,6 +606,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
               "re-derived and will lose its line -- check the window covers the "
               "months you care about.")
 
+    # Which BOOKINGS this run struck, for the reconciliation check after the loop.
+    struck_codes: set[str] = set()
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
              "cancelled": 0, "moved": 0, "out_of_scope": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
@@ -698,6 +749,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
             continue
         for k in grand:
             grand[k] += stats.get(k, 0)
+        struck_codes.update(
+            str(r.get("Confirmation Code", "")).strip().upper()
+            for r in changes["cancelled"]
+            if str(r.get("Confirmation Code", "")).strip())
         missing_city_props.update(changes["missing_city_properties"])
         emit_change_report(stats, changes, will_write=(not dry_run), label=ws.title)
         snap = full.copy(); snap.insert(0, "_tab", ws.title)
@@ -798,6 +853,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None) -> int:
               + (f", auto-created {len(created)} new tab(s)" if created else "")
               + (f", repaired {len(repaired)} shifted tab(s)" if repaired else "")
               + "." + tail)
+    if not _reconciles(struck_codes, snap_diff):
+        return 6
     return 0
 
 
@@ -1049,13 +1106,17 @@ def main(argv=None) -> int:
         reservations = fetch_from_guesty(cfg)
 
     describe_first(reservations)
+    snap_diff = None
     if not args.from_json:
         # Only ever snapshot a real full fetch. A --from-json payload is a partial,
         # possibly stale dataset: diffing it would invent cancellations, and storing
         # it would destroy the baseline the next live run needs.
-        record_reservation_snapshot(reservations, cfg, dry_run=args.dry_run)
-    rc = run(args.dry_run, reservations, cfg, ss=ss)
-    if args.scheduled and rc == 0:
+        snap_diff = record_reservation_snapshot(reservations, cfg,
+                                                dry_run=args.dry_run)
+    rc = run(args.dry_run, reservations, cfg, ss=ss, snap_diff=snap_diff)
+    # 6 means the sheet was written but the cancellation count did not
+    # reconcile. The work is done, so the day closes; the job still goes red.
+    if args.scheduled and rc in (0, 6):
         # Close the day only on success. A failed run leaves the claim open so a
         # later trigger retries rather than the whole day being lost.
         from daily_gate import mark_complete

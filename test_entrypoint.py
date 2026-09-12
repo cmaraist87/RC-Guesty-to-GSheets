@@ -50,7 +50,7 @@ def _patched(open_spreadsheet, store=None, fetch=None):
     daily_gate.should_run = lambda st, now=None, **kw: real_should_run(st, now=morning, **kw)
     sync.state_store = lambda cfg: FakeStore() if store is None else store
     sync.fetch_from_guesty = fetch or (lambda cfg: [])
-    sync.run = lambda dry, res, cfg, ss=None: 0
+    sync.run = lambda dry, res, cfg, ss=None, **kw: 0
     sync.load_config = lambda: dict(real[4](), sheet_id="sheet-1", sa_json="{}",
                                     client_id="id", client_secret="secret")
     try:

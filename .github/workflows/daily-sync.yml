@@ -47,7 +47,21 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      # The nightly run uses the commit tagged `live`, NOT whatever is on main.
+      #
+      # Three times in September a push of mine reached this job the same night and
+      # broke it: a credential regression on the 4th, a NameError on the 8th that
+      # killed both triggers, and unbatched writes on the 11th. Each passed the test
+      # suite and each was found by the sync failing at 4 AM.
+      #
+      # Moving `live` is now a deliberate act, so main can be worked on freely:
+      #     git tag -f live <commit> && git push -f origin live
+      #
+      # A manual dispatch can still run any ref, which is how a fix gets verified
+      # before the tag moves.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'live' || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
