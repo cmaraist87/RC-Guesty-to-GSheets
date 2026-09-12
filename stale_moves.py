@@ -166,12 +166,24 @@ def main(argv=None) -> int:
             print(f"      {verdict.upper()}: {why}")
 
         if args.fix:
-            # Bottom-up: deleting a row shifts every row under it.
+            # Bottom-up, and in ONE request per tab.
+            #
+            # A call per row blew Sheets' "write requests per minute per user"
+            # quota (60) partway through Agosto's 117 deletions on 2026-09-11, so
+            # the tab was left half-cleaned. Sheets applies the requests in the
+            # order given, and deleting from the bottom up means each index is
+            # still valid when its turn comes.
             doomed = sorted((g for _p, g, _r, v, _w in found if v == "move"),
                             reverse=True)
-            for grid_row in doomed:
-                with_retry(lambda gr=grid_row: ws.delete_rows(gr),
-                           f"deleting row {grid_row} of '{ws.title}'")
+            if doomed:
+                reqs = [{"deleteDimension": {"range": {
+                    "sheetId": ws.id, "dimension": "ROWS",
+                    "startIndex": gr - 1, "endIndex": gr}}} for gr in doomed]
+                for start in range(0, len(reqs), 500):
+                    chunk = reqs[start:start + 500]
+                    with_retry(
+                        lambda c=chunk: ws.spreadsheet.batch_update({"requests": c}),
+                        f"deleting {len(chunk)} row(s) from '{ws.title}'")
             deleted[ws.title] = len(doomed)
             print(f"   -> deleted {len(doomed)} row(s) proved to be moves; "
                   f"left {len(found) - len(doomed)} alone.")
