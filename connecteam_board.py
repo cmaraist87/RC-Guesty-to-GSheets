@@ -78,6 +78,12 @@ def main(argv=None) -> int:
     ap.add_argument("--city", default=None, help="One market; default is every board.")
     ap.add_argument("--from", dest="frm", required=True, metavar="YYYY-MM-DD")
     ap.add_argument("--to", dest="to", required=True, metavar="YYYY-MM-DD")
+    ap.add_argument("--jobs", action="store_true",
+                    help="List the Jobs defined on each board -- the entity a shift "
+                         "points at with jobId, and where the team carries the property.")
+    ap.add_argument("--envelope", action="store_true",
+                    help="Print the response ENVELOPE -- paging fields and counts, "
+                         "never shift contents. Used to learn how the API pages.")
     ap.add_argument("--keys", action="store_true",
                     help="Print the FIELD NAMES a shift carries, never the values. "
                          "Needed to see which field the team puts the property in, "
@@ -110,6 +116,15 @@ def main(argv=None) -> int:
         except ConnecteamError as e:
             print(f"Board {board} ({', '.join(cs)}): could not read -- {e}")
             continue
+        if args.envelope:
+            env = client.shifts_envelope(board, _epoch(lo, tz), _epoch(hi, tz, end=True))
+            def sketch(v):
+                if isinstance(v, list):
+                    return f"<list of {len(v)}>"
+                if isinstance(v, dict):
+                    return "{" + ", ".join(f"{k}: {sketch(x)}" for k, x in v.items()) + "}"
+                return repr(v)
+            print("   envelope: " + sketch(env))
         on_board[board] = (cs, tz, shifts)
         print(f"Board {board}  ({', '.join(cs)})")
         if args.keys and shifts:
@@ -123,6 +138,20 @@ def main(argv=None) -> int:
             for k, n in sorted(seen_keys.items()):
                 print(f"     {k:<28} {n}/{len(shifts)}")
         describe_board(shifts, tz)
+        print()
+
+    if args.jobs:
+        print("=" * 72)
+        print("  JOBS DEFINED ON EACH BOARD  (what `jobId` points at)")
+        print("=" * 72)
+        for board, cs in boards.items():
+            rows, how = client.list_jobs(board)
+            print()
+            print(f"Board {board} ({', '.join(cs)}): {len(rows)} job(s)   [{how}]")
+            for j in rows[:400]:
+                jid = j.get("jobId") or j.get("id") or "?"
+                name = j.get("name") or j.get("title") or j.get("jobName") or ""
+                print(f"   {str(jid):<26} {name}")
         print()
 
     # --- the comparison ------------------------------------------------------

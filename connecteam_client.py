@@ -34,6 +34,7 @@ from connecteam_map import assert_unassigned
 BASE = "https://api.connecteam.com"
 TIMEOUT = 30
 MAX_PER_REQUEST = 500          # the documented bulk ceiling
+PAGE_SIZE = 100                # how many shifts to ask for per read
 RETRY_STATUS = (408, 429, 500, 502, 503, 504)
 
 
@@ -123,11 +124,73 @@ class ConnecteamClient:
         return []
 
     # --- reading ----------------------------------------------------------
-    def existing_shifts(self, scheduler_id: str, start: int, end: int) -> list[dict]:
-        """Shifts already on this board between two epoch-second instants."""
+    def shifts_envelope(self, scheduler_id: str, start: int, end: int,
+                        limit: int | None = None, offset: int | None = None):
+        """The RAW response for one page of shifts, envelope and all.
+
+        `existing_shifts` throws the envelope away, which is where the paging
+        information lives -- and not knowing it is why the duplicate guard was
+        reading only the first ten jobs on a board.
+        """
         path = (f"/scheduler/v1/schedulers/{scheduler_id}/shifts"
                 f"?startTime={int(start)}&endTime={int(end)}")
-        return self._rows(self._request("GET", path))
+        if limit is not None:
+            path += f"&limit={int(limit)}"
+        if offset is not None:
+            path += f"&offset={int(offset)}"
+        return self._request("GET", path)
+
+    def existing_shifts(self, scheduler_id: str, start: int, end: int) -> list[dict]:
+        """EVERY shift already on this board between two epoch-second instants.
+
+        Pages until the board is exhausted. It used to make a single request and
+        keep whatever came back, which was ten -- so `create_shifts` compared what
+        it wanted to create against the first ten jobs only and would have
+        re-created everything else on a second run.
+        """
+        out: list[dict] = []
+        seen_ids: set = set()
+        offset = 0
+        for _page in range(200):          # a hard stop; 200 x 100 is far past any board
+            rows = self._rows(self.shifts_envelope(scheduler_id, start, end,
+                                                   limit=PAGE_SIZE, offset=offset))
+            if not rows:
+                break
+            fresh = [r for r in rows
+                     if r.get("id") is None or r.get("id") not in seen_ids]
+            # If a page repeats what we already hold, the server is ignoring our
+            # paging and looping would never end. Stop rather than spin.
+            if not fresh:
+                break
+            seen_ids.update(r["id"] for r in fresh if r.get("id") is not None)
+            out.extend(fresh)
+            if len(rows) < PAGE_SIZE:
+                break                      # a short page is the last page
+            offset += len(rows)
+        return out
+
+    def list_jobs(self, scheduler_id: str) -> tuple[list[dict], str]:
+        """The Jobs defined on a board: (rows, which path answered).
+
+        A Connecteam "Job" is the thing a shift points at with `jobId`, and it is
+        where the team carries the property -- every existing card has one filled
+        while barely half have a title. The exact path is not documented for this
+        account's plan, so the likely ones are tried in turn and the one that
+        answers is reported, rather than guessing in silence.
+        """
+        last = ""
+        for path in (f"/scheduler/v1/schedulers/{scheduler_id}/jobs",
+                     f"/scheduler/v1/schedulers/{scheduler_id}/job",
+                     "/scheduler/v1/jobs"):
+            try:
+                rows = self._rows(self._request("GET", path))
+            except ConnecteamError as e:
+                last = str(e)
+                continue
+            if rows:
+                return rows, path
+            last = f"{path} -> answered, but with no jobs"
+        return [], last
 
     # --- writing ----------------------------------------------------------
     def create_shifts(self, scheduler_id: str, shifts: list[dict],

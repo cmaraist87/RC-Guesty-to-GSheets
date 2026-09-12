@@ -108,6 +108,6 @@ jobs:
               # GETs only. connecteam_board.py contains no write path at all.
               CITY=""
               if [ -n "${{ inputs.city }}" ]; then CITY="--city ${{ inputs.city }}"; fi
-              python -u connecteam_board.py --from "${{ inputs.from }}" --to "${{ inputs.to }}" --keys ;;
+              python -u connecteam_board.py --from "${{ inputs.from }}" --to "${{ inputs.to }}" --keys --jobs --envelope ;;
             *)           python -u list_tabs.py ;;
           esac
