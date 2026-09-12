@@ -31,7 +31,11 @@ TZ = ZoneInfo("America/Chicago")
 # How late a trigger may arrive and still count as "this morning's run". Wide,
 # because the observed delay was over four hours and the cost of running late is
 # a fresher sheet, while the cost of not running is no sheet at all.
-WINDOW = (3, 12)          # [start, end) in Chicago local hours
+WINDOW = (1, 12)          # [start, end) in Chicago local hours
+# Starts at 1, not 3, because the crons now fire early to absorb GitHub's queue
+# delay. On a fast morning the first trigger can land around 2:30 AM Chicago, and
+# a window starting at 3 would reject exactly the early delivery we are aiming
+# for -- leaving the day to a later, slower trigger.
 
 # How long a claim is assumed to mean "a run is still in flight". Shorter than the
 # hour between the two crons, and far longer than a sync (about three minutes), so

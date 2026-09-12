@@ -66,13 +66,24 @@ def test_a_crashed_run_can_be_retried_the_same_day():
 
 def test_outside_the_window_never_runs():
     store = InMemoryObjectStore()
-    for h in (0, 2, 12, 13, 23):
+    for h in (0, 12, 13, 23):
         ok, why = should_run(store, now=at(h))
         assert not ok, (h, why)
         assert "outside the" in why, why
     # And a trigger outside the window must not have claimed the day.
     assert should_run(store, now=at(4))[0], "the real morning run must still be free"
-    print("OK the window holds: a 1 AM or 1 PM trigger is not this morning's run")
+    print("OK the window holds: a midnight or 1 PM trigger is not this morning's run")
+
+
+def test_an_early_delivery_is_this_morning_s_run():
+    """The crons fire early to absorb GitHub's queue delay -- a median of 4h10m
+    over 30 observed triggers. On a fast morning the first one lands around 2:30
+    AM Chicago, and the gate has to accept it: rejecting the early delivery would
+    hand the day back to a later, slower trigger, which is the whole problem."""
+    store = InMemoryObjectStore()
+    ok, why = should_run(store, now=at(2))
+    assert ok, why
+    print("OK a 2 AM delivery counts as this morning's run")
 
 
 def test_no_shared_store_falls_back_to_the_exact_hour():
@@ -111,6 +122,7 @@ if __name__ == "__main__":
     test_a_new_day_runs_again()
     test_a_crashed_run_can_be_retried_the_same_day()
     test_outside_the_window_never_runs()
+    test_an_early_delivery_is_this_morning_s_run()
     test_no_shared_store_falls_back_to_the_exact_hour()
     test_two_triggers_racing_produce_one_run()
     test_an_unreadable_record_skips_rather_than_double_runs()

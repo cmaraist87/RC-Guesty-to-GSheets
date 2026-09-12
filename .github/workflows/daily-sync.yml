@@ -10,8 +10,25 @@ name: Daily Guesty -> Sheet sync
 # never runs. Whichever trigger arrives first claims the day; the other stands down.
 on:
   schedule:
-    - cron: "0 9 * * *"
-    - cron: "0 10 * * *"
+    # These fire EARLY on purpose. GitHub runs scheduled workflows on a shared
+    # best-effort queue, and over 30 observed triggers the first one each day
+    # arrived a median of 4h10m late (range 3h14m - 5h38m). Asking for 4 AM
+    # therefore delivered about 8:10 AM, every day.
+    #
+    # The delay is consistent enough to aim off: 04:47 UTC plus the usual lag
+    # lands close to 4 AM Chicago. The minutes are deliberately NOT :00 -- that
+    # is the most contended slot on the platform, when every cron everywhere
+    # fires at once.
+    #
+    # Four triggers, not one, because each is an independent chance at an early
+    # slot and they cost nothing: sync.py asks shared state whether today's run
+    # has already happened, so the first to arrive does the work and the rest
+    # stand down. The last is a backstop -- if every earlier one is starved, the
+    # day still syncs.
+    - cron: "47 4 * * *"
+    - cron: "19 5 * * *"
+    - cron: "41 6 * * *"
+    - cron: "7 8 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
