@@ -52,7 +52,7 @@ CITY_SCHEDULERS = {
 # How long a clean is assumed to take when nothing bounds it -- a departure with no
 # arrival the same day. A turnover ignores this: its window is the real gap between
 # the guest leaving and the next one arriving.
-DEFAULT_CLEAN_HOURS = 4.0
+DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
 
 # Turnovers are the tight ones: someone arrives the same day, so the window is fixed
 # and short. Colour is the only thing that reads at a glance on a packed board.
@@ -135,12 +135,13 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
     if start is None:
         return None                      # unparseable date/time: skip, never guess
 
-    checkin = str(row.get("Check-in Time", "")).strip()
-    end = _parse_local(row.get("Date", ""), checkin, tz) if checkin else None
-    if end is None or end <= start:
-        # No arrival today, or times that do not make sense in order. Fall back to a
-        # nominal duration rather than emitting a zero- or negative-length shift.
-        end = start + timedelta(hours=clean_hours)
+    # The job starts when the guest leaves, and runs a FIXED window from there.
+    #
+    # It used to end at the next guest's check-in, which made a turnover's card
+    # as long as the gap happened to be -- 11:00-16:00 one day, 11:00-15:00 the
+    # next, for the same work. The card is a cleaning job, not the vacancy it sits
+    # in, so its length should not move with someone else's arrival time.
+    end = start + timedelta(hours=clean_hours)
 
     is_turnover = str(row.get("T/O", "")).strip().lower() == "yes"
     return {

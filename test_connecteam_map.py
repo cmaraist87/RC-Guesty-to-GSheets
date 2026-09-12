@@ -47,18 +47,33 @@ def test_every_shift_is_unassigned():
     print("OK: every shift is an open, unassigned shift with no user ids")
 
 
-def test_turnover_window_is_the_real_gap_between_guests():
-    """On a turnover the cleaner has exactly the window between the old guest
-    leaving and the new one arriving -- that is the shift, not a nominal duration."""
-    s = shift_for_row(_row(**{"Check-in Time": "04:00 PM", "T/O": "yes"}))
-    assert (_utc(s["endTime"]) - _utc(s["startTime"])) == dt.timedelta(hours=5)
-    assert s["color"] == TURNOVER_COLOR, "a turnover must stand out on the board"
+def test_every_job_is_a_fixed_window_from_the_checkout():
+    """The job starts when the guest leaves and runs a fixed four hours.
 
-    # A departure with no arrival today has no hard deadline -> nominal duration.
-    s2 = shift_for_row(_row())
-    assert (_utc(s2["endTime"]) - _utc(s2["startTime"])) == dt.timedelta(hours=DEFAULT_CLEAN_HOURS)
-    assert s2["color"] == STANDARD_COLOR
-    print("OK: a turnover spans the real gap; a plain departure gets a nominal window")
+    It used to end at the next guest's arrival, which made the same work 5h one day
+    and 4h the next depending on who was booked in. The card is the cleaning job,
+    not the vacancy around it, so its length must not move with someone else's
+    arrival time. Chris settled this on 2026-09-12.
+    """
+    window = dt.timedelta(hours=DEFAULT_CLEAN_HOURS)
+
+    # A turnover: an arrival at 4 PM must NOT stretch the card to five hours.
+    s = shift_for_row(_row(**{"Check-in Time": "04:00 PM", "T/O": "yes"}))
+    assert (_utc(s["endTime"]) - _utc(s["startTime"])) == window
+    assert s["color"] == TURNOVER_COLOR, "a turnover must still stand out on the board"
+
+    # An early arrival must not shorten it either.
+    s2 = shift_for_row(_row(**{"Check-in Time": "01:00 PM", "T/O": "yes"}))
+    assert (_utc(s2["endTime"]) - _utc(s2["startTime"])) == window
+
+    # And a plain departure is the same length as both.
+    s3 = shift_for_row(_row())
+    assert (_utc(s3["endTime"]) - _utc(s3["startTime"])) == window
+    assert s3["color"] == STANDARD_COLOR
+
+    # The start is the checkout itself, not a rounded or nominal hour.
+    assert _utc(s3["startTime"]) == _utc(shift_for_row(_row())["startTime"])
+    print("OK: every job is 4h from the checkout, whatever the arrival does")
 
 
 def test_cities_resolve_to_their_own_timezone():
@@ -266,7 +281,7 @@ def test_the_unassigned_gate_refuses_anything_with_a_person_on_it():
 if __name__ == "__main__":
     test_only_rows_with_a_checkout_become_jobs()
     test_every_shift_is_unassigned()
-    test_turnover_window_is_the_real_gap_between_guests()
+    test_every_job_is_a_fixed_window_from_the_checkout()
     test_cities_resolve_to_their_own_timezone()
     test_the_job_field_holds_the_property_name_and_nothing_else()
     test_the_codes_can_be_switched_back_on_without_rewriting_anything()
