@@ -13,7 +13,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 | 2026-09-12 | 0.75 | Phase 2 restart: reviewed `connecteam_client` / `connecteam_map` / `connecteam_push` against the post-Phase-1 codebase, confirmed the safety rails (create-only, `live=False` default, unassigned assertion, read-before-write duplicate guard), identified the four open design gaps, drafted the sequenced plan. | ✅ |
 | 2026-09-12 | 0.5 | Moved the Connecteam preview into GitHub Actions (preview-only; `--live` deliberately unreachable) so it no longer depends on the office machine's CA bundle. Ran the first post-Phase-1 Austin preview: 37 jobs, all Unassigned, property names clean. Found that the preview spans the whole month, so 10 of the 37 are for dates already past. | ✅ |
 
-**Total to date: 1.25 h**
+| 2026-09-12 | 1.0 | Built `connecteam_board.py` (read-only; no write path) to read the live boards and diff them against the sheet. Found three things that change the design: `existing_shifts` returns only 10 rows per board (a page cap), so the duplicate guard would not have stopped a second live run doubling the board; the team carries the property in `jobId` (10/10 filled) not `title` (5-6/10), which is the field our push sets; and their shifts run 0.5-8.5h from 06:00/08:00 rather than our fixed 4h from checkout. | ✅ |
+
+**Total to date: 2.25 h**
 
 ---
 
@@ -34,6 +36,9 @@ there for them and I was not watching a clock.
 These are the pieces of Phase 2 still to do. Listed so the log shows what remains,
 not only what is spent.
 
+- **Fix `existing_shifts` pagination** — blocking: the duplicate guard is currently blind past the first 10 jobs
+- **Map property → Connecteam `jobId`** — blocking: the team's job cards carry the property there, and our push does not set it
+- Agree the time model with the team (their shifts are a cleaner's working hours, not the checkout window)
 - First live push — one city, one narrow date window, verified on a phone
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
