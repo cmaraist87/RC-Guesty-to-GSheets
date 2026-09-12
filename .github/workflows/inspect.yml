@@ -20,12 +20,29 @@ on:
           - stale_moves       # struck rows whose booking is still live elsewhere
           - bad_units         # rows named with an invented unit (427 Gravier 002)
           - date_rows         # every row the sheet holds for one date
+          - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
         required: false
         default: false
         type: boolean
+      city:
+        description: "connecteam ONLY: which market to preview"
+        required: false
+        default: Austin
+        type: choice
+        options:
+          - Austin
+          - New Orleans
+          - Bay St. Louis
+          - Savannah
+          - Thunderbolt
+      month:
+        description: "connecteam ONLY: month tab (YYYY-MM, blank = current)"
+        required: false
+        default: ""
+        type: string
       date:
         description: "date_rows ONLY: which date to dump (YYYY-MM-DD)"
         required: false
@@ -56,6 +73,7 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
+          CONNECTEAM_API_KEY: ${{ secrets.CONNECTEAM_API_KEY }}
           WORKSHEET_NAME: ${{ vars.WORKSHEET_NAME }}
         run: |
           ARGS=""
@@ -68,5 +86,12 @@ jobs:
               if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
               python -u bad_units.py $ARGS ;;
             date_rows)   python -u date_rows.py --date "${{ inputs.date }}" ;;
+            connecteam)
+              # PREVIEW ONLY. --live is deliberately not reachable from here: a job
+              # card on a crew's phone cannot be taken back the way a sheet cell can,
+              # so the first write stays a deliberate, watched act.
+              MONTH=""
+              if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
+              python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH ;;
             *)           python -u list_tabs.py ;;
           esac
