@@ -78,6 +78,10 @@ def main(argv=None) -> int:
     ap.add_argument("--city", default=None, help="One market; default is every board.")
     ap.add_argument("--from", dest="frm", required=True, metavar="YYYY-MM-DD")
     ap.add_argument("--to", dest="to", required=True, metavar="YYYY-MM-DD")
+    ap.add_argument("--keys", action="store_true",
+                    help="Print the FIELD NAMES a shift carries, never the values. "
+                         "Needed to see which field the team puts the property in, "
+                         "without pulling employee data into a log.")
     args = ap.parse_args(argv)
 
     key = os.environ.get("CONNECTEAM_API_KEY", "").strip()
@@ -108,6 +112,16 @@ def main(argv=None) -> int:
             continue
         on_board[board] = (cs, tz, shifts)
         print(f"Board {board}  ({', '.join(cs)})")
+        if args.keys and shifts:
+            seen_keys: dict = {}
+            for sh in shifts:
+                for k, v in sh.items():
+                    filled = v not in (None, "", [], {}, 0)
+                    seen_keys[k] = seen_keys.get(k, 0) + (1 if filled else 0)
+            print("   fields present (name: how many of the "
+                  f"{len(shifts)} have it filled)")
+            for k, n in sorted(seen_keys.items()):
+                print(f"     {k:<28} {n}/{len(shifts)}")
         describe_board(shifts, tz)
         print()
 
