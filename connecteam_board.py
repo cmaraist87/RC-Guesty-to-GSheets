@@ -145,6 +145,14 @@ def main(argv=None) -> int:
         print("  JOBS DEFINED ON EACH BOARD  (what `jobId` points at)")
         print("=" * 72)
         for board, cs in boards.items():
+            # Even without a Jobs endpoint, the shifts themselves say how many
+            # distinct Jobs are actually in use -- which is the number that decides
+            # how big the mapping problem is.
+            got = on_board.get(board)
+            if got:
+                ids = {str(sh.get("jobId")) for sh in got[2] if sh.get("jobId")}
+                print(f"   board {board}: {len(ids)} distinct jobId(s) in use "
+                      f"across {len(got[2])} shift(s)")
             rows, how = client.list_jobs(board)
             print()
             print(f"Board {board} ({', '.join(cs)}): {len(rows)} job(s)   [{how}]")

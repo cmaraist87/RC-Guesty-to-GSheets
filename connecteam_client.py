@@ -178,19 +178,24 @@ class ConnecteamClient:
         account's plan, so the likely ones are tried in turn and the one that
         answers is reported, rather than guessing in silence.
         """
-        last = ""
+        tried: list[str] = []
         for path in (f"/scheduler/v1/schedulers/{scheduler_id}/jobs",
                      f"/scheduler/v1/schedulers/{scheduler_id}/job",
-                     "/scheduler/v1/jobs"):
+                     f"/scheduler/v1/schedulers/{scheduler_id}/sub-jobs",
+                     f"/scheduler/v1/schedulers/{scheduler_id}/settings",
+                     "/scheduler/v1/jobs",
+                     "/jobs/v1/jobs",
+                     "/job-scheduler/v1/jobs"):
             try:
-                rows = self._rows(self._request("GET", path))
+                rows = self._rows(self._request("GET", path, tries=1))
             except ConnecteamError as e:
-                last = str(e)
+                code = str(e).split("HTTP ")[-1][:3]
+                tried.append(f"{path} -> {code}")
                 continue
             if rows:
                 return rows, path
-            last = f"{path} -> answered, but with no jobs"
-        return [], last
+            tried.append(f"{path} -> 200 but no list")
+        return [], " | ".join(tried)
 
     # --- writing ----------------------------------------------------------
     def create_shifts(self, scheduler_id: str, shifts: list[dict],
