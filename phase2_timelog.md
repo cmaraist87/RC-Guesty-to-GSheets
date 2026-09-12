@@ -17,7 +17,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 | 2026-09-12 | 0.5 | Time model settled by Chris: a job card starts at the checkout time and runs a fixed 4h, regardless of the next arrival. Implemented, rewrote the test that pinned the old variable-length behaviour, re-previewed Austin -- 37 jobs, 36 of them 11:00-15:00 and one 13:00-17:00 where the checkout is later. | ✅ |
 
-**Total to date: 2.75 h**
+| 2026-09-12 | 1.25 | Blocker 1 **fixed**: `existing_shifts` now pages until a board is exhausted. Verified against the live boards -- Austin 10 -> 31, New Orleans/Bay St Louis 10 -> 882, Savannah/Thunderbolt 10 -> 194 for September. Blocker 2 **diagnosed**: found the Jobs endpoint (`/jobs/v1/jobs`, four other candidates 404), confirmed Job names are property addresses, and counted ~266 distinct Jobs actually in use. The Jobs list ignores the offset parameter the shifts accept, so reading it in full needs one more discovery step. | ◐ |
+
+**Total to date: 4.0 h**
 
 ---
 
@@ -38,8 +40,7 @@ there for them and I was not watching a clock.
 These are the pieces of Phase 2 still to do. Listed so the log shows what remains,
 not only what is spent.
 
-- **Fix `existing_shifts` pagination** — blocking: the duplicate guard is currently blind past the first 10 jobs
-- **Map property → Connecteam `jobId`** — blocking: the team's job cards carry the property there, and our push does not set it
+- **Map property → Connecteam `jobId`** — endpoint found; still needs the Jobs list's own paging convention, then name matching against ~266 Jobs
 - First live push — one city, one narrow date window, verified on a phone
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
