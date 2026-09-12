@@ -110,7 +110,15 @@ def diff(before: dict[str, dict], after: dict[str, dict],
         edited.append(rec)
         if "code" in fields:
             code_changed.append(rec)
-    return {"added": added, "gone": gone, "left_window": left_window,
+    # The confirmation codes of the reservations Guesty actually lost. This is the
+    # only ground truth the merge has for "cancelled": everything else it can do is
+    # inference from the shape of the sheet, and inference is what struck Taylor
+    # Eshmont, Lareina Kostenchuk and Paola Cardozo as cancellations while their
+    # bookings were alive.
+    gone_codes = sorted({before[r].get("code", "") for r in gone
+                         if before[r].get("code")})
+    return {"added": added, "gone": gone, "gone_codes": gone_codes,
+            "left_window": left_window,
             "edited": edited, "code_changed": code_changed,
             "counts": {"added": len(added), "gone": len(gone),
                        "left_window": len(left_window),

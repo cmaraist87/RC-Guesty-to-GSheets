@@ -68,6 +68,38 @@ def _street_key(prop: str) -> str:
     return " ".join(toks).lower()
 
 
+def pair_bookings(sheet: pd.DataFrame) -> dict:
+    """How many DISTINCT confirmation codes each pair of properties has shared.
+
+    A combined listing books its units together every time, so its properties
+    share many codes -- "402 W Hall" and "404 W Hall" are one booking. A
+    reassignment is a one-off: two addresses with no other history together.
+
+    This is the only thing that separates "a unit dropped out of a combined
+    booking" (a real cancellation) from "Guesty moved the booking somewhere else"
+    (not one). Reading the addresses cannot: 704 and 706 N 2nd are one listing and
+    look like two, while 31 Congress 301 and 406 W Hall are a genuine reassignment
+    and look like two as well.
+    """
+    from collections import defaultdict
+
+    if not len(sheet) or not {"Confirmation Code", "Property"} <= set(sheet.columns):
+        return {}
+    by_code = defaultdict(set)
+    for _, r in sheet.iterrows():
+        code = str(r.get("Confirmation Code", "")).strip().upper()
+        prop = str(r.get("Property", "")).strip()
+        if code and prop:
+            by_code[code].add(prop)
+    pairs = defaultdict(set)
+    for code, props in by_code.items():
+        ps = sorted(props)
+        for i, x in enumerate(ps):
+            for y in ps[i + 1:]:
+                pairs[(x, y)].add(code)
+    return {k: len(v) for k, v in pairs.items()}
+
+
 def build_city_resolver(sheet: pd.DataFrame, city_ref_csv: str = "property_to_city.csv"):
     exact, canon, street = {}, {}, {}
 
@@ -249,6 +281,7 @@ def merge_reservations_into_sheet(
     collapse_duplicates: bool = False,
     live_by_code_all: dict | None = None,
     history_before: str | None = None,
+    vanished_codes: set | None = None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """
     cancel_window : (start_iso, end_iso) -- the date range the Guesty fetch fully
@@ -263,6 +296,14 @@ def merge_reservations_into_sheet(
         where it moved to, highlighted, carrying its ticks -- a move is not a
         cancellation and must not be counted as one. It also does not inflate the
         short-fetch guard, because a move proves the fetch carried that reservation.
+
+    vanished_codes : the confirmation codes Guesty actually LOST since the last
+        run, from the reservation snapshot. Ground truth for "cancelled". When
+        given, a row is struck only if its booking really disappeared; a booking
+        Guesty still holds is worked out below as either a date change, a
+        reassignment, or one unit dropping out of a combined listing. Pass None to
+        fall back to inferring it all from the shape of the sheet, which is what
+        struck three live bookings as cancellations in September.
 
     history_before : ISO date -- the first day the Guesty fetch covers. An existing
         row dated before it is never rewritten, because the fetch no longer carries
@@ -469,6 +510,7 @@ def merge_reservations_into_sheet(
     guard_tripped = ""
     allowed = frozenset(norm_city(c) for c in (allowed_cities or ()))
     has_city = "City" in sheet.columns
+    pair_counts = pair_bookings(sheet) if vanished_codes is not None else {}
     if cancel_window and len(sheet):
         lo, hi = cancel_window
         in_window = 0
@@ -539,9 +581,33 @@ def merge_reservations_into_sheet(
                 code = str(r["Confirmation Code"]).strip().upper()
                 here = live_by_code.get(code, [])
                 dests = here if here else (live_by_code_all or {}).get(code, [])
-                mine = sheet_keys_by_code.get(code, frozenset())
-                if any(dest not in mine for dest in dests):
-                    moved_pos.add(i)
+
+                if vanished_codes is not None and code:
+                    # Guesty told us what it lost. Anything else is alive, and the
+                    # only question is what it did.
+                    if code in vanished_codes:
+                        pass                      # really cancelled: keep the line
+                    elif prop in {p for p, _d in dests}:
+                        # Still booked at THIS property, on another date. Paola
+                        # Cardozo's checkout slid 09-15 -> 09-18 and her old row was
+                        # struck as a cancellation; the reconciliation check caught
+                        # it the first time it ran.
+                        moved_pos.add(i)
+                    elif any(pair_counts.get(tuple(sorted((prop, p))), 0) > 1
+                             for p, _d in dests):
+                        # The booking still covers a property this one is routinely
+                        # booked WITH -- a combined listing that lost a unit. That
+                        # is a real cancellation and keeps its line.
+                        pass
+                    elif dests:
+                        moved_pos.add(i)          # reassigned somewhere unrelated
+                    # else: alive but nowhere this sheet covers -- leave it struck.
+                else:
+                    # No snapshot to go on (first run, or state unreachable). Fall
+                    # back to inferring from the sheet, as before.
+                    mine = sheet_keys_by_code.get(code, frozenset())
+                    if any(dest not in mine for dest in dests):
+                        moved_pos.add(i)
 
         # The guard exists to catch a SHORT FETCH, where reservations vanish from the
         # payload entirely. A moved row proves its reservation did arrive, so it must

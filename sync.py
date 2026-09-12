@@ -608,6 +608,10 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
 
     # Which BOOKINGS this run struck, for the reconciliation check after the loop.
     struck_codes: set[str] = set()
+    # None (not an empty set) when there is nothing to go on: an empty set
+    # would mean "Guesty lost nothing", which is a very different claim.
+    vanished = (set(snap_diff.get("gone_codes") or [])
+                if snap_diff and snap_diff.get("had_baseline") else None)
     grand = {"new": 0, "updated": 0, "removed": 0, "unchanged": 0,
              "cancelled": 0, "moved": 0, "out_of_scope": 0, "missing_city": 0}
     skipped = []      # (ym, count): months with data but no tab (dry-run only)
@@ -710,6 +714,8 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
                 live_by_code_all=live_by_code_all,
                 # Freeze anything older than the fetch itself -- see the merge.
                 history_before=(coverage[0] if coverage else None),
+                # Guesty's own list of what it lost -- see the merge.
+                vanished_codes=vanished,
             )
         except ShiftedLayoutError as e:
             if not cfg.get("repair_shifted"):
