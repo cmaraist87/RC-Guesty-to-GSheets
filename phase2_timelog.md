@@ -15,7 +15,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 | 2026-09-12 | 1.0 | Built `connecteam_board.py` (read-only; no write path) to read the live boards and diff them against the sheet. Found three things that change the design: `existing_shifts` returns only 10 rows per board (a page cap), so the duplicate guard would not have stopped a second live run doubling the board; the team carries the property in `jobId` (10/10 filled) not `title` (5-6/10), which is the field our push sets; and their shifts run 0.5-8.5h from 06:00/08:00 rather than our fixed 4h from checkout. | ✅ |
 
-**Total to date: 2.25 h**
+| 2026-09-12 | 0.5 | Time model settled by Chris: a job card starts at the checkout time and runs a fixed 4h, regardless of the next arrival. Implemented, rewrote the test that pinned the old variable-length behaviour, re-previewed Austin -- 37 jobs, 36 of them 11:00-15:00 and one 13:00-17:00 where the checkout is later. | ✅ |
+
+**Total to date: 2.75 h**
 
 ---
 
@@ -38,7 +40,6 @@ not only what is spent.
 
 - **Fix `existing_shifts` pagination** — blocking: the duplicate guard is currently blind past the first 10 jobs
 - **Map property → Connecteam `jobId`** — blocking: the team's job cards carry the property there, and our push does not set it
-- Agree the time model with the team (their shifts are a cleaner's working hours, not the checkout window)
 - First live push — one city, one narrow date window, verified on a phone
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
