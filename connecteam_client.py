@@ -179,22 +179,35 @@ class ConnecteamClient:
         answers is reported, rather than guessing in silence.
         """
         tried: list[str] = []
-        for path in (f"/scheduler/v1/schedulers/{scheduler_id}/jobs",
-                     f"/scheduler/v1/schedulers/{scheduler_id}/job",
-                     f"/scheduler/v1/schedulers/{scheduler_id}/sub-jobs",
-                     f"/scheduler/v1/schedulers/{scheduler_id}/settings",
-                     "/scheduler/v1/jobs",
-                     "/jobs/v1/jobs",
-                     "/job-scheduler/v1/jobs"):
+        for path in ("/jobs/v1/jobs",
+                     f"/scheduler/v1/schedulers/{scheduler_id}/jobs",
+                     "/scheduler/v1/jobs"):
             try:
-                rows = self._rows(self._request("GET", path, tries=1))
+                first = self._rows(self._request("GET", path + "?limit=100", tries=1))
             except ConnecteamError as e:
-                code = str(e).split("HTTP ")[-1][:3]
-                tried.append(f"{path} -> {code}")
+                tried.append(f"{path} -> {str(e).split('HTTP ')[-1][:3]}")
                 continue
-            if rows:
-                return rows, path
-            tried.append(f"{path} -> 200 but no list")
+            if not first:
+                tried.append(f"{path} -> 200 but no list")
+                continue
+            # Paged the same way the shifts are, and capped the same way: ask for
+            # 100, receive 10. Walk it until the list runs out.
+            out, seen, offset = list(first), set(), len(first)
+            seen.update(str(j.get("id") or j.get("jobId")) for j in first)
+            for _page in range(400):
+                try:
+                    rows = self._rows(self._request(
+                        "GET", f"{path}?limit=100&offset={offset}", tries=1))
+                except ConnecteamError:
+                    break
+                fresh = [j for j in rows
+                         if str(j.get("id") or j.get("jobId")) not in seen]
+                if not fresh:
+                    break
+                seen.update(str(j.get("id") or j.get("jobId")) for j in fresh)
+                out.extend(fresh)
+                offset += len(rows)
+            return out, path
         return [], " | ".join(tried)
 
     # --- writing ----------------------------------------------------------
