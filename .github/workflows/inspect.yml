@@ -21,6 +21,7 @@ on:
           - bad_units         # rows named with an invented unit (427 Gravier 002)
           - date_rows         # every row the sheet holds for one date
           - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
+          - board             # READ what is already on the Connecteam boards
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
@@ -40,6 +41,16 @@ on:
           - Thunderbolt
       month:
         description: "connecteam ONLY: month tab (YYYY-MM, blank = current)"
+        required: false
+        default: ""
+        type: string
+      from:
+        description: "board ONLY: range start (YYYY-MM-DD)"
+        required: false
+        default: ""
+        type: string
+      to:
+        description: "board ONLY: range end (YYYY-MM-DD)"
         required: false
         default: ""
         type: string
@@ -93,5 +104,10 @@ jobs:
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
               python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH ;;
+            board)
+              # GETs only. connecteam_board.py contains no write path at all.
+              CITY=""
+              if [ -n "${{ inputs.city }}" ]; then CITY="--city ${{ inputs.city }}"; fi
+              python -u connecteam_board.py --from "${{ inputs.from }}" --to "${{ inputs.to }}" ;;
             *)           python -u list_tabs.py ;;
           esac
