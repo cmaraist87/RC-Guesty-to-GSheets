@@ -42,10 +42,6 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     board = scheduler_for(args.city)
-    if args.test:
-        board = TEST_SCHEDULER
-        print(f"TEST BOARD: sending {args.city}'s jobs to scheduler {board}, "
-              f"not to {args.city}'s own board.")
     if board is None:
         print(f"ERROR: '{args.city}' is not one of the covered markets.", file=sys.stderr)
         print("       Covered: " + ", ".join(sorted(CITY_SCHEDULERS)), file=sys.stderr)
@@ -87,6 +83,23 @@ def main(argv=None) -> int:
 
     payloads = [p for _, p in jobs]
     client = ConnecteamClient(key)
+    if args.test:
+        # Verify before redirecting. The test board's id has already changed twice --
+        # once because a group id was mistaken for it, once because the board was
+        # deleted and rebuilt -- so a pinned id that has gone stale must say so here
+        # rather than 404 in the middle of a write.
+        boards = {str(b.get("schedulerId") or b.get("id")): (b.get("name") or "")
+                  for b in client.list_schedulers()}
+        if TEST_SCHEDULER not in boards:
+            print(f"ERROR: the test board {TEST_SCHEDULER} is not on this account any "
+                  f"more.", file=sys.stderr)
+            print("       Boards that do exist:", file=sys.stderr)
+            for bid, name in sorted(boards.items()):
+                print(f"         {bid:<12} {name}", file=sys.stderr)
+            return 2
+        board = TEST_SCHEDULER
+        print(f"TEST BOARD: sending {args.city}'s jobs to {board} "
+              f"({boards[board]!r}), not to {args.city}'s own board.")
     print(f"\nBoard {board} ({args.city}) -- "
           + ("CREATING" if args.live else "PREVIEW, nothing will be sent") + ":\n")
     try:

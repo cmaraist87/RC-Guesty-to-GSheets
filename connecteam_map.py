@@ -59,11 +59,16 @@ CITY_SCHEDULERS = {
 # rather than a mistyped argument. The live boards above have 31, 882 and 194 jobs
 # in September; none of them is a place to find out whether our payload is accepted.
 #
-# The id is 19710485, confirmed against the account's own scheduler list. It was
-# briefly committed as 16642349 -- a number read off a Connecteam URL that is not
-# a scheduler id at all, and matches no board on the account. That is exactly why
-# the id is verified against the API rather than trusted from a URL.
-TEST_SCHEDULER = "19710485"
+# 19713722, confirmed against the account's own scheduler list ("Chris Test").
+#
+# It has moved twice already: first committed as 16642349, which is a GROUP id off a
+# Connecteam URL and names no board at all; then 19710485, which was the board before
+# it was deleted and recreated. A scheduler id is not stable across a board being
+# rebuilt, and the number in a URL is often not a scheduler id in the first place.
+#
+# So the push VERIFIES this id against the live list and prints the board's name
+# before it writes anything -- a stale id should say so, not 404 halfway through.
+TEST_SCHEDULER = "19713722"
 
 DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
 

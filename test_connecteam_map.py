@@ -287,11 +287,11 @@ def test_the_test_board_is_not_a_live_one():
     assert TEST_SCHEDULER not in live, (
         f"the test board {TEST_SCHEDULER} is also a live market board")
     assert TEST_SCHEDULER, "a blank test board id would send jobs nowhere, silently"
-    # The id the account's own scheduler list reports for "Chris' Test Scheduler".
-    # Pinned because it was first committed as 16642349 -- a number off a Connecteam
-    # URL that names no board at all.
-    assert TEST_SCHEDULER == "19710485", (
-        f"test board id is {TEST_SCHEDULER}; the account lists 19710485")
+    # What the account's own scheduler list reports for the test board. Pinned
+    # because this id has already moved twice: 16642349 was a group id off a URL,
+    # and 19710485 was the board before it was deleted and rebuilt.
+    assert TEST_SCHEDULER == "19713722", (
+        f"test board id is {TEST_SCHEDULER}; the account lists 19713722")
     print("OK: the test board is not any market's board")
 
 
