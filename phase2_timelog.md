@@ -19,7 +19,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 | 2026-09-12 | 1.25 | Blocker 1 **fixed**: `existing_shifts` now pages until a board is exhausted. Verified against the live boards -- Austin 10 -> 31, New Orleans/Bay St Louis 10 -> 882, Savannah/Thunderbolt 10 -> 194 for September. Blocker 2 **diagnosed**: found the Jobs endpoint (`/jobs/v1/jobs`, four other candidates 404), confirmed Job names are property addresses, and counted ~266 distinct Jobs actually in use. The Jobs list ignores the offset parameter the shifts accept, so reading it in full needs one more discovery step. | ◐ |
 
-**Total to date: 4.0 h**
+| 2026-09-13 | 0.5 | Wired Chris' Test Scheduler (16642349) in as a named target: `--test` on the push redirects a city's jobs to it, `--board` lets the reader open any board by id. The id lives in code rather than an argument so sending somewhere by mistake needs a code change; a test asserts it is not also a market's board. | ✅ |
+
+**Total to date: 4.5 h**
 
 ---
 
@@ -41,7 +43,7 @@ These are the pieces of Phase 2 still to do. Listed so the log shows what remain
 not only what is spent.
 
 - **Map property → Connecteam `jobId`** — endpoint found; still needs the Jobs list's own paging convention, then name matching against ~266 Jobs
-- First live push — one city, one narrow date window, verified on a phone
+- First write of any kind — to the **test board**, verified there before any market board is considered
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
 - Decide the rolling push window **(now blocking the first live push)**
