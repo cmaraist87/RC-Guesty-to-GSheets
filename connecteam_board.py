@@ -76,8 +76,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--city", default=None, help="One market; default is every board.")
-    ap.add_argument("--from", dest="frm", required=True, metavar="YYYY-MM-DD")
-    ap.add_argument("--to", dest="to", required=True, metavar="YYYY-MM-DD")
+    ap.add_argument("--from", dest="frm", default=None, metavar="YYYY-MM-DD")
+    ap.add_argument("--to", dest="to", default=None, metavar="YYYY-MM-DD")
+    ap.add_argument("--schedulers", action="store_true",
+                    help="List every board on the account and stop.")
     ap.add_argument("--jobs", action="store_true",
                     help="List the Jobs defined on each board -- the entity a shift "
                          "points at with jobId, and where the team carries the property.")
@@ -93,6 +95,25 @@ def main(argv=None) -> int:
     key = os.environ.get("CONNECTEAM_API_KEY", "").strip()
     if not key:
         print("ERROR: CONNECTEAM_API_KEY is not set.", file=sys.stderr)
+        return 2
+    if args.schedulers:
+        client = ConnecteamClient(key)
+        rows = client.list_schedulers()
+        print(f"{len(rows)} scheduler(s) on this account:")
+        print()
+        known = {v: k for k, v in CITY_SCHEDULERS.items()}
+        for sc in rows:
+            sid = str(sc.get("schedulerId") or sc.get("id") or "?")
+            name = sc.get("name") or sc.get("title") or ""
+            use = known.get(sid, "")
+            print(f"   {sid:<14} {name:<44} {'<- ' + use if use else 'not mapped'}")
+        print()
+        print("Nothing was written.")
+        return 0
+
+    if not (args.frm and args.to):
+        print("ERROR: --from and --to are required unless --schedulers is given.",
+              file=sys.stderr)
         return 2
     lo, hi = date.fromisoformat(args.frm), date.fromisoformat(args.to)
     cities = [args.city] if args.city else sorted(CITY_SCHEDULERS)

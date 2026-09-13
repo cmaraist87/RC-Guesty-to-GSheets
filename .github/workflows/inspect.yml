@@ -22,6 +22,7 @@ on:
           - date_rows         # every row the sheet holds for one date
           - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
           - board             # READ what is already on the Connecteam boards
+          - schedulers        # LIST every Connecteam board on the account
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
@@ -104,6 +105,7 @@ jobs:
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
               python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH ;;
+            schedulers)  python -u connecteam_board.py --schedulers ;;
             board)
               # GETs only. connecteam_board.py contains no write path at all.
               CITY=""

@@ -124,6 +124,10 @@ class ConnecteamClient:
         return []
 
     # --- reading ----------------------------------------------------------
+    def list_schedulers(self) -> list[dict]:
+        """Every scheduler (board) on the account, in use or not."""
+        return self._rows(self._request("GET", "/scheduler/v1/schedulers"))
+
     def shifts_envelope(self, scheduler_id: str, start: int, end: int,
                         limit: int | None = None, offset: int | None = None):
         """The RAW response for one page of shifts, envelope and all.
