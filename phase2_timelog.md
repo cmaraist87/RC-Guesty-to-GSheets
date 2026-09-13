@@ -23,7 +23,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 | 2026-09-13 | 0.25 | Test board rebuilt by Chris, so its scheduler id moved again (19710485 -> 19713722). Confirmed against the account listing rather than a URL, and made `--test` verify the id and print the board's name before writing -- the id has now moved twice and a stale one should stop, not 404 mid-write. | ✅ |
 
-**Total to date: 4.75 h**
+| 2026-09-13 | 1.0 | **First write of the project.** Added a live path reachable only when bolted to `--test`, so no workflow input can reach a market board. First attempt refused (HTTP 400): Connecteam validates colour against a fixed palette and neither of ours was on it — nothing written, which is what the test board is for. Recorded the API's own palette, repinned both colours, retried: **37 Austin jobs created on 'Chris Test', all Unassigned.** Ran it a second time to exercise the duplicate guard — all 37 recognised and skipped, 0 created, which also proves the pagination fix under real conditions. | ✅ |
+
+**Total to date: 5.75 h**
 
 ---
 
@@ -45,7 +47,9 @@ These are the pieces of Phase 2 still to do. Listed so the log shows what remain
 not only what is spent.
 
 - **Map property → Connecteam `jobId`** — endpoint found; still needs the Jobs list's own paging convention, then name matching against ~266 Jobs
-- First write of any kind — to the **test board**, verified there before any market board is considered
+- Decide whether a card with no Job attached is acceptable (37 are on the test board now to look at)
+- Job lifecycle: update and delete when a booking moves or cancels
+- First write to a **market** board
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
 - Decide the rolling push window **(now blocking the first live push)**
