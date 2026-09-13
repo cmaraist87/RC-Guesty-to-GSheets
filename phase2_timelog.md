@@ -21,7 +21,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 | 2026-09-13 | 0.5 | Wired Chris' Test Scheduler (16642349) in as a named target: `--test` on the push redirects a city's jobs to it, `--board` lets the reader open any board by id. The id lives in code rather than an argument so sending somewhere by mistake needs a code change; a test asserts it is not also a market's board. | ✅ |
 
-**Total to date: 4.5 h**
+| 2026-09-13 | 0.25 | Test board rebuilt by Chris, so its scheduler id moved again (19710485 -> 19713722). Confirmed against the account listing rather than a URL, and made `--test` verify the id and print the board's name before writing -- the id has now moved twice and a stale one should stop, not 404 mid-write. | ✅ |
+
+**Total to date: 4.75 h**
 
 ---
 
