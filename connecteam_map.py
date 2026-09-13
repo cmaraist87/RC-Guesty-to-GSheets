@@ -58,7 +58,12 @@ CITY_SCHEDULERS = {
 # Named, not passed as a raw id, so sending somewhere by mistake takes a code change
 # rather than a mistyped argument. The live boards above have 31, 882 and 194 jobs
 # in September; none of them is a place to find out whether our payload is accepted.
-TEST_SCHEDULER = "16642349"
+#
+# The id is 19710485, confirmed against the account's own scheduler list. It was
+# briefly committed as 16642349 -- a number read off a Connecteam URL that is not
+# a scheduler id at all, and matches no board on the account. That is exactly why
+# the id is verified against the API rather than trusted from a URL.
+TEST_SCHEDULER = "19710485"
 
 DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
 
