@@ -22,7 +22,8 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError
-from connecteam_map import CITY_SCHEDULERS, scheduler_for, shift_for_row, timezone_for
+from connecteam_map import (CITY_SCHEDULERS, DEFAULT_TIMEZONE, scheduler_for,
+                            shift_for_row, timezone_for)
 from sheet_merge import norm_city
 from sheets_client import month_worksheets, open_spreadsheet, read_as_dataframe
 from sync import load_config
@@ -76,6 +77,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--city", default=None, help="One market; default is every board.")
+    ap.add_argument("--board", default=None,
+                    help="Read one board by id -- e.g. the test board, which is "
+                         "not a market and so has no --city.")
     ap.add_argument("--from", dest="frm", default=None, metavar="YYYY-MM-DD")
     ap.add_argument("--to", dest="to", default=None, metavar="YYYY-MM-DD")
     ap.add_argument("--schedulers", action="store_true",
@@ -117,9 +121,13 @@ def main(argv=None) -> int:
         return 2
     lo, hi = date.fromisoformat(args.frm), date.fromisoformat(args.to)
     cities = [args.city] if args.city else sorted(CITY_SCHEDULERS)
+    if args.board:
+        cities = []
 
     client = ConnecteamClient(key)
     boards: dict = {}
+    if args.board:
+        boards[str(args.board)] = [f"board {args.board}"]
     for city in cities:
         board = scheduler_for(city)
         if board is None:
@@ -130,7 +138,7 @@ def main(argv=None) -> int:
     print(f"Reading {lo} .. {hi}  (READ-ONLY)\n")
     on_board: dict = {}
     for board, cs in boards.items():
-        tz = timezone_for(cs[0])
+        tz = DEFAULT_TIMEZONE if cs[0].startswith("board ") else timezone_for(cs[0])
         try:
             shifts = client.existing_shifts(board, _epoch(lo, tz),
                                             _epoch(hi, tz, end=True))

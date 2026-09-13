@@ -52,6 +52,14 @@ CITY_SCHEDULERS = {
 # How long a clean is assumed to take when nothing bounds it -- a departure with no
 # arrival the same day. A turnover ignores this: its window is the real gap between
 # the guest leaving and the next one arriving.
+# Chris' Test Scheduler -- a board with no crew on it, created 2026-09-12 so the
+# write path can be exercised for real without a job card reaching anyone's phone.
+#
+# Named, not passed as a raw id, so sending somewhere by mistake takes a code change
+# rather than a mistyped argument. The live boards above have 31, 882 and 194 jobs
+# in September; none of them is a place to find out whether our payload is accepted.
+TEST_SCHEDULER = "16642349"
+
 DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
 
 # Turnovers are the tight ones: someone arrives the same day, so the window is fixed

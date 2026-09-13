@@ -20,7 +20,8 @@ import os
 import sys
 
 from connecteam_client import ConnecteamClient, ConnecteamError
-from connecteam_map import CITY_SCHEDULERS, scheduler_for, shifts_by_scheduler
+from connecteam_map import (CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
+                            shifts_by_scheduler)
 from sheet_merge import norm_city
 from sheets_client import month_worksheets, open_spreadsheet, read_as_dataframe
 from sync import _spanish_tab, _today_chicago, load_config
@@ -33,11 +34,18 @@ def main(argv=None) -> int:
                     help="One market at a time: " + ", ".join(sorted(CITY_SCHEDULERS)))
     ap.add_argument("--month", default=None, metavar="YYYY-MM",
                     help="Which month tab to read. Defaults to the current month.")
+    ap.add_argument("--test", action="store_true",
+                    help="Send to the test board instead of the city's real one. "
+                         "The board has no crew, so nothing reaches a phone.")
     ap.add_argument("--live", action="store_true",
                     help="Actually create the jobs. Without it, nothing is sent.")
     args = ap.parse_args(argv)
 
     board = scheduler_for(args.city)
+    if args.test:
+        board = TEST_SCHEDULER
+        print(f"TEST BOARD: sending {args.city}'s jobs to scheduler {board}, "
+              f"not to {args.city}'s own board.")
     if board is None:
         print(f"ERROR: '{args.city}' is not one of the covered markets.", file=sys.stderr)
         print("       Covered: " + ", ".join(sorted(CITY_SCHEDULERS)), file=sys.stderr)
