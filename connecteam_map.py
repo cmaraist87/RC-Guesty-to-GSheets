@@ -74,8 +74,22 @@ DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
 
 # Turnovers are the tight ones: someone arrives the same day, so the window is fixed
 # and short. Colour is the only thing that reads at a glance on a packed board.
-TURNOVER_COLOR = "#B23B3B"
-STANDARD_COLOR = "#3B6FB2"
+# Connecteam validates the colour against a fixed palette and rejects anything else
+# with HTTP 400 (error_code 1002). Our first write to the test board was refused for
+# exactly this: "#3B6FB2" and "#B23B3B" are reasonable blues and reds and neither is
+# on the list.
+#
+# These are the values the API itself named in that rejection. The list is longer
+# than this -- the error was truncated in the log -- but every entry here came from
+# the API, not from a colour picker.
+ALLOWED_COLORS = (
+    "#4B7AC5", "#801A1A", "#AE2121", "#DC7A7A", "#B0712E", "#D4985A", "#E4B37F",
+    "#AE8E2D", "#CBA73A", "#D9B443", "#487037", "#6F9B5C", "#91B282", "#365C64",
+    "#5687B3", "#7C9BA2", "#3968BB", "#85A6DA", "#225A8C",
+)
+
+TURNOVER_COLOR = "#AE2121"     # red: a turnover, where the clean has a hard deadline
+STANDARD_COLOR = "#3968BB"     # blue: an ordinary departure clean
 
 _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")
 

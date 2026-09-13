@@ -278,6 +278,27 @@ def test_the_unassigned_gate_refuses_anything_with_a_person_on_it():
     print("OK gate: any shift naming a person is refused before it can reach the API")
 
 
+def test_every_colour_we_send_is_one_the_api_accepts():
+    """Connecteam validates colour against a fixed palette and rejects the whole
+    request with HTTP 400 if it does not match.
+
+    The first write of the project was refused for exactly this -- "#3B6FB2" and
+    "#B23B3B" are a perfectly good blue and red, and neither is on the list. One bad
+    colour fails the entire batch, so this is not cosmetic.
+    """
+    from connecteam_map import ALLOWED_COLORS, STANDARD_COLOR, TURNOVER_COLOR
+
+    for name, value in (("TURNOVER_COLOR", TURNOVER_COLOR),
+                        ("STANDARD_COLOR", STANDARD_COLOR)):
+        assert value in ALLOWED_COLORS, (
+            f"{name} is {value}, which the API will reject")
+
+    # And whatever a real row produces, not just the constants.
+    for row in (_row(), _row(**{"T/O": "yes", "Check-in Time": "04:00 PM"})):
+        assert shift_for_row(row)["color"] in ALLOWED_COLORS
+    print("OK: every colour sent is one the API named as valid")
+
+
 def test_the_test_board_is_not_a_live_one():
     """The whole point of a test board is that a mistake there reaches nobody.
     If its id ever collided with a market's, that guarantee would be silently gone.
@@ -300,6 +321,7 @@ if __name__ == "__main__":
     test_only_rows_with_a_checkout_become_jobs()
     test_every_shift_is_unassigned()
     test_every_job_is_a_fixed_window_from_the_checkout()
+    test_every_colour_we_send_is_one_the_api_accepts()
     test_the_test_board_is_not_a_live_one()
     test_cities_resolve_to_their_own_timezone()
     test_the_job_field_holds_the_property_name_and_nothing_else()
