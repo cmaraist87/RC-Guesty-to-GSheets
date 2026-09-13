@@ -29,6 +29,14 @@ on:
         required: false
         default: false
         type: boolean
+      connecteam_write:
+        description: "connecteam ONLY: preview, or actually write TO THE TEST BOARD"
+        required: false
+        default: preview
+        type: choice
+        options:
+          - preview
+          - WRITE-TO-TEST-BOARD
       city:
         description: "connecteam ONLY: which market to preview"
         required: false
@@ -99,12 +107,20 @@ jobs:
               python -u bad_units.py $ARGS ;;
             date_rows)   python -u date_rows.py --date "${{ inputs.date }}" ;;
             connecteam)
-              # PREVIEW ONLY. --live is deliberately not reachable from here: a job
-              # card on a crew's phone cannot be taken back the way a sheet cell can,
-              # so the first write stays a deliberate, watched act.
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
-              python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH ;;
+              # --live is ONLY ever paired with --test here, and the pairing is in one
+              # branch so the two cannot come apart. There is no combination of inputs
+              # to this workflow that writes to a market board; that stays a deliberate
+              # act at a terminal, because a card on a crew's phone cannot be taken
+              # back the way a sheet cell can.
+              if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
+                echo "::warning::Writing to the TEST board (no market board can be"
+                echo "::warning::reached from this workflow)."
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test --live
+              else
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
+              fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
             board)
               # GETs only. connecteam_board.py contains no write path at all.
