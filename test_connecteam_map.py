@@ -278,6 +278,19 @@ def test_the_unassigned_gate_refuses_anything_with_a_person_on_it():
     print("OK gate: any shift naming a person is refused before it can reach the API")
 
 
+def test_the_test_board_is_not_a_live_one():
+    """The whole point of a test board is that a mistake there reaches nobody.
+    If its id ever collided with a market's, that guarantee would be silently gone.
+    """
+    from connecteam_map import CITY_SCHEDULERS, TEST_SCHEDULER
+    live = set(CITY_SCHEDULERS.values())
+    assert TEST_SCHEDULER not in live, (
+        f"the test board {TEST_SCHEDULER} is also a live market board")
+    assert TEST_SCHEDULER, "a blank test board id would send jobs nowhere, silently"
+    print("OK: the test board is not any market's board")
+
+
+
 if __name__ == "__main__":
     test_only_rows_with_a_checkout_become_jobs()
     test_every_shift_is_unassigned()
@@ -298,15 +311,3 @@ if __name__ == "__main__":
     test_one_city_can_be_switched_on_alone()
     test_the_unassigned_gate_refuses_anything_with_a_person_on_it()
     print("\nALL CONNECTEAM-MAP TESTS PASSED")
-
-
-def test_the_test_board_is_not_a_live_one():
-    """The whole point of a test board is that a mistake there reaches nobody.
-    If its id ever collided with a market's, that guarantee would be silently gone.
-    """
-    from connecteam_map import TEST_SCHEDULER
-    live = set(CITY_SCHEDULERS.values())
-    assert TEST_SCHEDULER not in live, (
-        f"the test board {TEST_SCHEDULER} is also a live market board")
-    assert TEST_SCHEDULER, "a blank test board id would send jobs nowhere, silently"
-    print("OK: the test board is not any market's board")
