@@ -150,8 +150,18 @@ def main(argv=None) -> int:
         {"field": "checkIn", "operator": "$lte", "value": hi},
         {"field": "status", "operator": "$in", "value": cfg["statuses"]},
     ], fields=requested_fields())
-    present = any(str(x.get("confirmationCode", "")).strip().upper() == want
-                  for x in same)
+    mine = [x for x in same
+            if str(x.get("confirmationCode", "")).strip().upper() == want]
+    present = bool(mine)
+    if present:
+        # The copy the SYNC gets, which is not necessarily the copy a by-code query
+        # gets. Guesty trims nested objects differently per request, and a city that
+        # is present in one projection and absent in the other would explain a run
+        # reporting 100% city coverage while this tool reports none.
+        m = mine[0]
+        print(f"   city on the sync's copy : {_first_city(m)!r}")
+        for path in ("listing.address.city", "listingId.address.city", "listing.city"):
+            print(f"      {path:<28} {_dig(m, path)!r}")
     print(f"   the sync's filters return {len(same)} reservation(s)")
     print(f"   {want} among them: " + ("YES" if present else "NO"))
     if not present:
