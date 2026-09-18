@@ -23,8 +23,8 @@ from datetime import timedelta
 from guesty_adapter import reservations_to_frames, requested_fields
 from processing import EXCLUDE_PROPERTIES, _canonical_key, normalize_property
 from sheet_merge import norm_city
-from sync import (DEFAULT_CITIES, _today_chicago, coverage_window, guesty_token,
-                  load_config)
+from sync import (DEFAULT_CITIES, _first_city, _today_chicago, coverage_window,
+                  guesty_token, load_config)
 
 
 def _dig(d, path):
@@ -85,12 +85,20 @@ def main(argv=None) -> int:
     ci = str(_dig(r, "checkInDateLocalized") or "")[:10]
     co = str(_dig(r, "checkOutDateLocalized") or "")[:10]
     listing = _dig(r, "listing.nickname") or ""
-    city = _dig(r, "listing.address.city") or ""
+    # The SAME resolution the sync uses. An earlier version of this file read only
+    # listing.address.city and reported a blank -- but FIELD_MAP tries three paths,
+    # so a booking can have a city the sync finds and this tool did not. That made
+    # the tool say "no city" about a reservation the sync may see perfectly well.
+    city = _first_city(r) or ""
+    raw_paths = {p: _dig(r, p) for p in
+                 ("listing.address.city", "listingId.address.city", "listing.city")}
     status = r.get("status", "")
     print(f"\nFOUND in Guesty:")
     print(f"   guest    : {_dig(r, 'guest.fullName')}")
     print(f"   listing  : {listing!r}")
     print(f"   city     : {city!r}")
+    for path, val in raw_paths.items():
+        print(f"      {path:<28} {val!r}")
     print(f"   check-in : {ci}    check-out: {co}")
     print(f"   status   : {status}")
 
