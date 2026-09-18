@@ -23,6 +23,7 @@ on:
           - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
           - board             # READ what is already on the Connecteam boards
           - schedulers        # LIST every Connecteam board on the account
+          - why_missing       # why is one reservation not on the sheet?
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
@@ -50,6 +51,11 @@ on:
           - Thunderbolt
       month:
         description: "connecteam ONLY: month tab (YYYY-MM, blank = current)"
+        required: false
+        default: ""
+        type: string
+      code:
+        description: "why_missing ONLY: the confirmation code to trace"
         required: false
         default: ""
         type: string
@@ -91,6 +97,9 @@ jobs:
       - name: Run
         env:
           SHEET_ID: ${{ secrets.SHEET_ID }}
+          GUESTY_CLIENT_ID: ${{ secrets.GUESTY_CLIENT_ID }}
+          GUESTY_CLIENT_SECRET: ${{ secrets.GUESTY_CLIENT_SECRET }}
+          STATE_BUCKET: ${{ vars.STATE_BUCKET }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           SYNC_LISTING_CITIES: ${{ vars.SYNC_LISTING_CITIES }}
           CONNECTEAM_API_KEY: ${{ secrets.CONNECTEAM_API_KEY }}
@@ -122,6 +131,7 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            why_missing) python -u find_reservation.py --code "${{ inputs.code }}" ;;
             board)
               # GETs only. connecteam_board.py contains no write path at all.
               CITY=""
