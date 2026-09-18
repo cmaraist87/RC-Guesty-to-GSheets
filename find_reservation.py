@@ -40,7 +40,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--code", required=True, help="Confirmation code")
     ap.add_argument("--days", type=int, default=400,
-                    help="How wide to search when the normal window misses it.")
+                    help="Unused; kept so older invocations do not break.")
     args = ap.parse_args(argv)
     want = args.code.strip().upper()
 
@@ -54,23 +54,31 @@ def main(argv=None) -> int:
     print(f"The sync's own window: checkOut >= {lo}, checkIn <= {hi}")
     print(f"The sync's statuses  : {', '.join(cfg['statuses'])}\n")
 
-    # A deliberately WIDE net -- no status filter, a year either side -- so the
-    # answer distinguishes "Guesty does not have it" from "the sync's filters
-    # excluded it", which are very different problems.
-    wide_lo = (today - timedelta(days=args.days)).isoformat()
-    wide_hi = (today + timedelta(days=args.days)).isoformat()
+    # Ask Guesty for THIS booking, by the key we already have.
+    #
+    # The first version of this scanned 400 days with no status filter and let the
+    # code fall out of the results. Guesty's planner timed out on it five times
+    # running -- "operation exceeded time limit" -- which is a fair complaint about
+    # a query that reads two years of reservations to find one.
     rows = fetch_reservations(token, filters=[
-        {"field": "checkOut", "operator": "$gte", "value": wide_lo},
-        {"field": "checkIn", "operator": "$lte", "value": wide_hi},
+        {"field": "confirmationCode", "operator": "$eq", "value": want},
     ], fields=requested_fields())
-    print(f"Searched {len(rows)} reservation(s) over {wide_lo} .. {wide_hi}.")
+    print(f"Guesty returned {len(rows)} reservation(s) for that code.")
+
+    if not rows:
+        # Some codes differ only by case or stray whitespace in the sheet, so a
+        # near-miss is worth reporting as a near-miss rather than "does not exist".
+        print()
+        print(f"No reservation in Guesty carries the code {want}.")
+        print("  Check the code on the sheet against Guesty -- a transposed or")
+        print("  truncated code looks exactly like a missing booking from here.")
+        return 1
 
     hit = [r for r in rows
            if str(r.get("confirmationCode", "")).strip().upper() == want]
     if not hit:
-        print(f"\n  {want} is not in Guesty at all within that range.")
-        print("  Either the code is different from what the sheet expects, or the")
-        print("  booking sits outside even this wide search.")
+        print()
+        print(f"Guesty answered, but no row actually carries {want}.")
         return 1
 
     r = hit[0]
