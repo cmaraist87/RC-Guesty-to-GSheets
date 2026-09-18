@@ -128,10 +128,21 @@ def main(argv=None) -> int:
           + (f"  -- {excluded} are on the do-not-clean list" if excluded else ""))
     ok &= e_ok
 
+    # The sync resolves a BLANK city from property_to_city.csv before it filters,
+    # exactly as the merge does. Testing the raw Guesty value here reported this
+    # booking as dropped twice, when the sync would have placed it perfectly well --
+    # a diagnostic that skips a step the real code takes will invent failures.
+    import pandas as pd
+
+    from sheet_merge import build_city_resolver
+
+    resolve = build_city_resolver(pd.DataFrame())
+    effective = city.strip() or resolve(props[0] if props else "")
     allowed = {norm_city(c) for c in (cfg.get("cities") or DEFAULT_CITIES)}
-    c_ok = norm_city(city) in allowed
+    c_ok = norm_city(effective) in allowed
+    via = "" if city.strip() else "  (from property_to_city.csv)"
     print(f"  5. city filter         {'PASS' if c_ok else 'DROPPED'}"
-          + ("" if c_ok else f"  -- {city!r} is not a covered market"))
+          f"  -- city resolves to {effective!r}{via}")
     ok &= c_ok
 
     out_df, in_df = reservations_to_frames([r])
