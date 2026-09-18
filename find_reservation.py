@@ -62,7 +62,7 @@ def main(argv=None) -> int:
     # a query that reads two years of reservations to find one.
     rows = fetch_reservations(token, filters=[
         {"field": "confirmationCode", "operator": "$eq", "value": want},
-    ], fields=requested_fields())
+    ], fields=None)   # no projection: we want createdAt, which is not in FIELD_MAP
     print(f"Guesty returned {len(rows)} reservation(s) for that code.")
 
     if not rows:
@@ -101,6 +101,14 @@ def main(argv=None) -> int:
         print(f"      {path:<28} {val!r}")
     print(f"   check-in : {ci}    check-out: {co}")
     print(f"   status   : {status}")
+    # WHEN the booking appeared decides whether the sync could ever have seen it.
+    # A reservation created after a morning run is simply not in that run's fetch,
+    # and that is not a defect -- the sheet is a daily snapshot.
+    for path in ("createdAt", "created_at", "creationTime", "confirmedAt",
+                 "lastUpdatedAt", "updatedAt"):
+        v = _dig(r, path)
+        if v:
+            print(f"   {path:<9}: {v}")
 
     print("\nWalking the sync's gates:\n")
     ok = True
