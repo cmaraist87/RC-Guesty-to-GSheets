@@ -62,7 +62,10 @@ def main(argv=None) -> int:
     # a query that reads two years of reservations to find one.
     rows = fetch_reservations(token, filters=[
         {"field": "confirmationCode", "operator": "$eq", "value": want},
-    ], fields=None)   # no projection: we want createdAt, which is not in FIELD_MAP
+    # The sync's projection PLUS createdAt. Dropping the projection entirely was
+    # worse than useless: without `fields` Guesty returns a trimmed reservation and
+    # the listing, dates and status all came back empty, so every gate "failed".
+    ], fields=requested_fields() + " createdAt confirmedAt")
     print(f"Guesty returned {len(rows)} reservation(s) for that code.")
 
     if not rows:
