@@ -138,6 +138,26 @@ def main(argv=None) -> int:
     print(f"  6. produces rows       check-out rows {len(out_df)}, "
           f"check-in rows {len(in_df)}")
 
+    # Is it in the fetch the SYNC actually makes? Everything above asks what the
+    # gates would do; this asks whether the booking ever reaches them.
+    #
+    # Those are different failures. A filter dropping a row is a rule we chose; a
+    # fetch missing a row that matches its own filters is a hole.
+    print()
+    print("Is it in the sync's own fetch?")
+    same = fetch_reservations(token, filters=[
+        {"field": "checkOut", "operator": "$gte", "value": lo},
+        {"field": "checkIn", "operator": "$lte", "value": hi},
+        {"field": "status", "operator": "$in", "value": cfg["statuses"]},
+    ], fields=requested_fields())
+    present = any(str(x.get("confirmationCode", "")).strip().upper() == want
+                  for x in same)
+    print(f"   the sync's filters return {len(same)} reservation(s)")
+    print(f"   {want} among them: " + ("YES" if present else "NO"))
+    if not present:
+        print("   -- it matches every filter above, so a fetch that does not")
+        print("      return it is returning less than it was asked for.")
+
     print("\n" + "=" * 64)
     print("  Every gate passed -- this booking SHOULD be on the sheet."
           if ok else "  The first DROPPED line above is why it is not on the sheet.")
