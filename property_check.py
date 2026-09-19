@@ -93,6 +93,43 @@ def main(argv=None) -> int:
                   f"{str(r.get('Confirmation Code','')):<14}"
                   f"{'STRUCK' if i in struck else ''}")
 
+    # --- and what the MERGE decides for it ------------------------------------
+    #
+    # The comparison above says what should exist. This says what the merge does
+    # with it -- the flag it assigns and where the row lands -- because a row can
+    # be reported "cancelled" in the log and still not be struck on the sheet, and
+    # only the merge's own output distinguishes those.
+    from sheets_client import _STRIKE_FLAGS, read_row_marks as _rm
+    from sheet_merge import merge_reservations_into_sheet
+    from sync import tab_cancel_window
+
+    print()
+    print("=== what the merge decides ===")
+    for key in months:
+        ws = tabs.get(key)
+        if ws is None:
+            continue
+        ym = f"{key[0]}-{key[1]:02d}"
+        sheet_df, header_raw = read_as_dataframe(ws)
+        prior_struck, _phl, _pac = _rm(ws)
+        month_cands = kept[kept["Date"].astype(str).str[:7] == ym]
+        full, stats, ch = merge_reservations_into_sheet(
+            month_cands.reset_index(drop=True), sheet_df,
+            cancel_window=tab_cancel_window(coverage_window(cfg), ym),
+            struck_rows=frozenset(prior_struck),
+            allowed_cities=frozenset(cfg.get("cities") or DEFAULT_CITIES))
+        flags = ch["row_flags"]
+        hits = [i for i in range(len(full))
+                if needle in str(full.iloc[i].get("Property", "")).lower()]
+        print(f"   {ws.title}: {len(hits)} row(s) matched")
+        for i in hits:
+            r = full.iloc[i]
+            f = flags[i]
+            print(f"      out-row {i + 2:<6}{str(r.get('Date'))[:10]}  "
+                  f"{str(r.get('Property')):<18}{str(r.get('Guest'))[:20]:<22}"
+                  f"flag={f or '(none)':<12}"
+                  f"{'-> WILL BE STRUCK' if f in _STRIKE_FLAGS else ''}")
+
     missing = [(r["Property"], r["Date"]) for _, r in want.iterrows()
                if (str(r["Property"]).strip(), str(r["Date"])[:10]) not in on_sheet]
     print("\n" + "=" * 70)
