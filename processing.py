@@ -84,7 +84,12 @@ def _continue_unit_numbers(units: list[str]) -> list[str]:
     out = [units[0]]
     for u in units[1:]:
         prev = out[-1]
-        out.append(prev[:len(prev) - len(u)] + u if len(u) < len(prev) else u)
+        # Continuation only makes sense between two NUMBERS. In a mixed list like
+        # "A&B&2" the 2 follows a letter and means unit 2, not "the one after B".
+        if u.isdigit() and prev.isdigit() and len(u) < len(prev):
+            out.append(prev[:len(prev) - len(u)] + u)
+        else:
+            out.append(u)
     return out
 
 
@@ -155,18 +160,20 @@ def normalize_property(listing: str) -> list:
             num2 = num1[:len(num1) - len(num2)] + num2
         return [f"{num1} {street}", f"{num2} {street}"]
 
-    # "422 Gravier 201&202" / "31 Con 203&4": digit unit list after street name
-    match = re.match(r'^(.*?\d+\s+\w+)\s+([\d]+(?:&[\d]+)+)$', raw)
+    # A trailing unit list, whatever it is made of: "201&202", "203&4", "A&B",
+    # "A&B&2", "1&2&CH".
+    #
+    # These used to be two separate rules -- one for all-digit lists, one for
+    # all-single-letter lists -- and a mixed list matched neither. "224 Ogle A&B&2"
+    # therefore survived as a property of that name, which does not exist: Destiny
+    # Sessums' arrival into units A, B and 2 landed on a phantom row on 18 Sept
+    # while 224 Ogle A and B showed a departure with no arrival. The team reported
+    # A and B as missing and they were right -- the information was filed under a
+    # name nobody would look for.
+    match = re.match(r'^(.+?)\s+([0-9A-Za-z]+(?:&[0-9A-Za-z]+)+)$', raw)
     if match:
         base = match.group(1)
         return [f"{base} {u}" for u in _continue_unit_numbers(match.group(2).split('&'))]
-
-    # "1229 Dela A&B": letter unit list after address
-    match = re.match(r'^(.+)\s+([A-Z](?:&[A-Z])+)$', raw)
-    if match:
-        base  = match.group(1)
-        units = match.group(2).split('&')
-        return [f"{base} {u}" for u in units]
 
     return [raw]
 

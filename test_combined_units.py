@@ -32,6 +32,32 @@ def test_a_two_digit_fragment_replaces_two_digits():
     print("OK 203&14 -> 203, 214")
 
 
+def test_a_mixed_letter_and_digit_list_splits_too():
+    """"224 Ogle A&B&2" is three units, not a property called "A&B&2".
+
+    There used to be a rule for all-digit lists and a rule for all-single-letter
+    lists, and a mixed list matched neither -- so it survived whole. On 18 Sept
+    2026 Destiny Sessums' arrival into units A, B and 2 landed on a phantom row
+    called "224 Ogle A&B&2", while "224 Ogle A" and "224 Ogle B" showed a departure
+    with no arrival and "224 Ogle 2" got nothing. The team reported A and B as
+    missing and they were right: the arrival was filed under a name that does not
+    exist.
+    """
+    assert prop("224 Ogle A&B&2 V1") == ["224 Ogle A", "224 Ogle B", "224 Ogle 2"]
+    assert prop("105 E Duffy 1&2&CH") == ["105 E Duffy 1", "105 E Duffy 2",
+                                          "105 E Duffy CH"]
+    print("OK A&B&2 -> three units (was one phantom property)")
+
+
+def test_continuation_only_applies_between_numbers():
+    """"203&4" means 203 and 204. "A&B&2" means A, B and unit 2 -- the 2 follows a
+    letter, so it is a unit number, not "the one after B"."""
+    assert prop("31 Con 203&4") == ["31 Congress 203", "31 Congress 204"]
+    assert prop("224 Ogle A&B&2") == ["224 Ogle A", "224 Ogle B", "224 Ogle 2"]
+    assert prop("224 Ogle B&2") == ["224 Ogle B", "224 Ogle 2"], "not 'B2'"
+    print("OK digit continuation does not leak into mixed lists")
+
+
 def test_whole_unit_numbers_are_left_alone():
     """The case that already worked and must not regress."""
     assert prop("422 Gravier 201&202 V1") == ["422 Gravier 201", "422 Gravier 202"]
@@ -65,6 +91,8 @@ if __name__ == "__main__":
     test_a_short_fragment_continues_the_unit_before_it()
     test_it_keeps_going_for_three_or_more()
     test_a_two_digit_fragment_replaces_two_digits()
+    test_a_mixed_letter_and_digit_list_splits_too()
+    test_continuation_only_applies_between_numbers()
     test_whole_unit_numbers_are_left_alone()
     test_the_other_combining_rules_are_untouched()
     test_every_expanded_unit_is_a_property_the_city_map_knows()
