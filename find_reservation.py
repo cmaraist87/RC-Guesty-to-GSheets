@@ -190,6 +190,38 @@ def main(argv=None) -> int:
         print("   -- it matches every filter above, so a fetch that does not")
         print("      return it is returning less than it was asked for.")
 
+    # Does anything else in the same fetch land on the same (Property, Date)?
+    #
+    # process_reservations keys its lookups on exactly that pair, so a second
+    # booking on the same property and day OVERWRITES the first and the loser
+    # vanishes with no message. Two Guesty listings collide here easily, because
+    # normalize_property strips the version marker: "717 Teche V1" and
+    # "717 Teche V2" are one property as far as the sheet is concerned.
+    if present:
+        from processing import normalize_property as _np
+
+        want_keys = {(pr, d) for pr in props for d in (ci, co) if d}
+        rivals = set()
+        for x in same:
+            xc = str(x.get("confirmationCode", "")).strip().upper()
+            if xc == want:
+                continue
+            xl = _dig(x, "listing.nickname") or ""
+            xci = str(_dig(x, "checkInDateLocalized") or "")[:10]
+            xco = str(_dig(x, "checkOutDateLocalized") or "")[:10]
+            for pr in _np(xl):
+                for d in (xci, xco):
+                    if d and (pr, d) in want_keys:
+                        rivals.add((pr, d, xl, xc,
+                                    _dig(x, "guest.fullName") or ""))
+        print()
+        print("Anything else claiming the same (Property, Date)?")
+        if not rivals:
+            print("   nothing -- this booking has its slots to itself")
+        for pr, d, xl, xc, g in sorted(rivals):
+            print(f"   {pr} on {d}  <- also {xl!r}  {xc}  {g}")
+            print("      one of these two overwrites the other, silently")
+
     print("\n" + "=" * 64)
     print("  Every gate passed -- this booking SHOULD be on the sheet."
           if ok else "  The first DROPPED line above is why it is not on the sheet.")
