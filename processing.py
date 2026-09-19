@@ -237,6 +237,17 @@ def process_reservations(
 
     checkout_lookup = {}
     checkin_lookup  = {}
+    # Two bookings landing on the same (property, date) can only produce ONE row --
+    # these dicts are keyed on that pair, so the second silently replaces the first
+    # and a real cleaning job disappears with no message anywhere.
+    #
+    # It is not a hypothetical. normalize_property strips the version marker, so
+    # "717 Teche V1" and "717 Teche V2" are one property to this code, and two
+    # distinct Guesty listings collapse into one slot.
+    #
+    # The collapse is left as it is -- the sheet's model really is one row per
+    # property per day -- but it is no longer silent.
+    _collisions: list = []
     # Departing and arriving reservations are tracked SEPARATELY. A single
     # guest_lookup keyed on (prop, date) meant the check-in pass overwrote whatever
     # the check-out pass had written, so on a turnover date -- the one date where
@@ -251,6 +262,11 @@ def process_reservations(
         co_date = co_dt.strftime("%Y-%m-%d")
         city    = str(row.get("LISTING'S CITY", '')).strip()
         for prop in props:
+            if (prop, co_date) in checkout_lookup:
+                _collisions.append(
+                    (prop, co_date, "check-out",
+                     checkout_guest.get((prop, co_date), ("", ""))[0],
+                     row.get('CONFIRMATION CODE', '')))
             checkout_lookup[(prop, co_date)] = co_dt.strftime("%I:%M %p")
             checkout_guest[(prop, co_date)]  = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
             if city and city.lower() != 'nan':
@@ -263,11 +279,27 @@ def process_reservations(
         ci_date = ci_dt.strftime("%Y-%m-%d")
         city    = str(row.get("LISTING'S CITY", '')).strip()
         for prop in props:
+            if (prop, ci_date) in checkin_lookup:
+                _collisions.append(
+                    (prop, ci_date, "check-in",
+                     checkin_guest.get((prop, ci_date), ("", ""))[0],
+                     row.get('CONFIRMATION CODE', '')))
             checkin_lookup[(prop, ci_date)] = ci_dt.strftime("%I:%M %p")
             checkin_guest[(prop, ci_date)]  = (row.get('CONFIRMATION CODE', ''), row.get('GUEST', ''))
             if city and city.lower() != 'nan':
                 city_lookup[prop] = city
                 city_by_key[_canonical_key(prop)] = city
+
+    if _collisions:
+        print()
+        print(f"!! {len(_collisions)} booking(s) were overwritten: another "
+              f"reservation claimed the same property and date.")
+        for prop, date, kind, kept, lost in _collisions[:20]:
+            print(f"     {date}  {prop}  ({kind})  {lost} replaced {kept}")
+        if len(_collisions) > 20:
+            print(f"     ... and {len(_collisions) - 20} more")
+        print("     Only one of each pair reaches the sheet. If a booking is "
+              "reported missing, look here first.")
 
     all_events = set(checkout_lookup.keys()) | set(checkin_lookup.keys())
 
