@@ -27,6 +27,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
 **Total to date: 5.75 h**
 
+> Phase 1 work continues alongside and is **not** billed here.
+
+
 ---
 
 ## How this log is kept
