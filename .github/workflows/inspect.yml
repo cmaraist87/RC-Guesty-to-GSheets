@@ -26,6 +26,7 @@ on:
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
+          - marks_audit       # does reading the marks see the whole tab?
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
@@ -140,6 +141,7 @@ jobs:
             schedulers)  python -u connecteam_board.py --schedulers ;;
             why_missing) python -u find_reservation.py --code "${{ inputs.code }}" ;;
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
+            marks_audit) python -u marks_audit.py ;;
             duplicates)
               ARGS2=""
               if [ "${{ inputs.scope }}" = "all" ]; then ARGS2="--all"; fi
