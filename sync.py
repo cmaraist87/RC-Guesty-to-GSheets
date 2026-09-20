@@ -524,6 +524,32 @@ def _reconciles(struck_codes: set[str], snap_diff: dict | None) -> bool:
     return False
 
 
+def _repairable_struck(sheet_df, prior_struck, window) -> frozenset:
+    """The struck rows a repair run is allowed to forget: those inside the fetch.
+
+    SYNC_REPAIR_STRIKES re-derives cancellations by handing the merge an empty
+    set of struck rows, so every row is judged fresh against Guesty. That only
+    works where Guesty has something to say. The fetch starts at yesterday, and
+    for anything older the merge skips the row entirely -- so a mark forgotten
+    there is never re-applied, and a real cancellation silently loses its line.
+
+    Keeping the marks on out-of-window rows costs the repair nothing: those rows
+    were not going to be re-judged either way.
+    """
+    from sheet_merge import _date_key
+    if not window or sheet_df is None or not len(sheet_df):
+        return frozenset()
+    lo, hi = window
+    keep = set()
+    for i in prior_struck:
+        if i >= len(sheet_df):
+            continue
+        d = _date_key(sheet_df.iloc[i].get("Date", ""))
+        if not (lo <= d <= hi):
+            keep.add(i)          # outside the fetch: the repair cannot re-derive it
+    return frozenset(keep)
+
+
 def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
         snap_diff: dict | None = None) -> int:
     df_co, df_ci = reservations_to_frames(reservations)
@@ -697,14 +723,23 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
         cb_cols = frozenset(sheet_df.columns[j] for j in cb_idx
                             if j < len(sheet_df.columns))
         try:
+            tab_window = tab_cancel_window(cancel_window, ym)
             full, stats, changes = merge_reservations_into_sheet(
                 cand, sheet_df,
-                cancel_window=tab_cancel_window(cancel_window, ym),
+                cancel_window=tab_window,
                 # On a repair run, start from "nothing is struck" so every row is
                 # re-examined against Guesty. The guard has to be relaxed to match:
                 # a month's accumulated cancellations arriving in one run is exactly
                 # the mass strike it exists to block, and here it is legitimate.
-                struck_rows=frozenset() if cfg.get("repair_strikes") else prior_struck,
+                #
+                # But only for rows the repair can actually re-derive. The fetch is
+                # checkOut >= yesterday, and the merge SKIPS any row outside that
+                # window rather than judging it -- so forgetting such a row's mark
+                # means nothing ever puts it back, and the line is simply lost. On
+                # 2026-09-20 that stripped 24 Septiembre rows dated 09-01 to 09-18,
+                # eight of whose bookings Guesty still reports as canceled.
+                struck_rows=_repairable_struck(sheet_df, prior_struck, tab_window)
+                if cfg.get("repair_strikes") else prior_struck,
                 delete_out_of_scope=bool(cfg.get("delete_out_of_scope")),
                 collapse_duplicates=bool(cfg.get("collapse_duplicates")),
                 cancel_guard=(1.0, 10 ** 9) if cfg.get("repair_strikes") else (0.5, 10),
