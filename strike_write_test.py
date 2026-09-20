@@ -75,8 +75,8 @@ def _sequence(ws, first: int, n_cols: int, already: set) -> int:
     last = first + size - 1
     rng = f"A{first}:{_col_letter(n_cols)}{last}"
     body = [[f"seq-test {r}"] + [""] * (n_cols - 1) for r in targets]
-    print(f"
-SEQUENCE test: writing values to {rng}, then painting {size} rows")
+    print("")
+    print(f"SEQUENCE test: writing values to {rng}, then painting {size} rows")
     try:
         ws.update(range_name=rng, values=body, value_input_option="USER_ENTERED")
         replies = paint(ws, targets, True, n_cols)
