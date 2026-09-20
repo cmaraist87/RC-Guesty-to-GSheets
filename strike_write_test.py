@@ -60,6 +60,44 @@ def paint(ws, rows_1based, on: bool, n_cols: int) -> int:
     return len((resp or {}).get("replies") or [])
 
 
+def _dump(ws, lo: int, hi: int, n_cols: int) -> None:
+    """Every column of a few rows, raw, plus whatever the tab says about them.
+
+    A single repeatCell on row 50 comes back 200 OK and changes nothing, while
+    the same call on row 1595 works every time. Column A alone cannot say why, so
+    print both formats for every column, and ask the tab whether these rows are
+    hidden, filtered, or grouped.
+    """
+    params = {
+        "includeGridData": "true",
+        "ranges": [f"'{ws.title}'!A{lo}:{_col_letter(n_cols)}{hi}"],
+        "fields": "sheets(basicFilter,data(rowMetadata(hiddenByFilter,hiddenByUser),"
+                  "rowData(values(formattedValue,"
+                  "userEnteredFormat/textFormat/strikethrough,"
+                  "effectiveFormat/textFormat/strikethrough))))",
+    }
+    meta = ws.spreadsheet.fetch_sheet_metadata(params)
+    sheet0 = (meta.get("sheets") or [{}])[0]
+    data = (sheet0.get("data") or [{}])[0]
+    print("")
+    print(f"  basicFilter on tab: {bool(sheet0.get('basicFilter'))}")
+    md = data.get("rowMetadata") or []
+    for i, rd in enumerate((data.get("rowData") or [])):
+        r = lo + i
+        u = [c for c, v in enumerate(rd.get("values") or [])
+             if ((v.get("userEnteredFormat") or {}).get("textFormat") or {})
+             .get("strikethrough")]
+        e = [c for c, v in enumerate(rd.get("values") or [])
+             if ((v.get("effectiveFormat") or {}).get("textFormat") or {})
+             .get("strikethrough")]
+        m = md[i] if i < len(md) else {}
+        first = ((rd.get("values") or [{}])[0]).get("formattedValue", "")
+        print(f"    row {r:<5} cells={len(rd.get('values') or [])} "
+              f"userEntered={u} effective={e} "
+              f"hiddenByFilter={m.get('hiddenByFilter')} "
+              f"hiddenByUser={m.get('hiddenByUser')}  A={first!r}")
+
+
 def _named_rows(ws, rows_1based, n_cols: int, confirm: bool) -> int:
     """Paint the exact rows the sync cannot mark, then put them back.
 
@@ -91,6 +129,7 @@ def _named_rows(ws, rows_1based, n_cols: int, confirm: bool) -> int:
                   f"{len(took)} of {len(todo)} took")
             if len(took) < len(todo):
                 print(f"      DID NOT TAKE: {[r for r in todo if r not in took]}")
+        _dump(ws, lo, min(hi, lo + 12), n_cols)
     finally:
         back_on = sorted(r for r in rows_1based if r in before)
         back_off = sorted(r for r in rows_1based if r not in before)
