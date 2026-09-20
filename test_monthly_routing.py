@@ -454,17 +454,37 @@ def test_grid_untouched_when_it_already_fits():
 
 
 class RecordingSS:
-    """Minimal spreadsheet stand-in that captures batch_update payloads."""
+    """Minimal spreadsheet stand-in that captures batch_update payloads.
 
-    def __init__(self, row_marks=None):
+    It also honours the strikethrough requests it is handed, because the paint is
+    now read back and repaired if it did not land (see test_strike_verify). A
+    stand-in that swallowed every request would look like a sheet refusing the
+    mark, and the repair passes would show up in `requests`.
+    """
+
+    def __init__(self, row_marks=None, struck=()):
         self.requests = []
-        self._row_marks = row_marks or []
+        self._row_marks = row_marks
+        self._struck: set[int] = set(struck)   # the lines already on the grid
 
     def batch_update(self, body):
         self.requests.extend(body["requests"])
+        for req in body["requests"]:
+            rc = req.get("repeatCell")
+            if not rc or "strikethrough" not in rc.get("fields", ""):
+                continue
+            on = rc["cell"]["userEnteredFormat"]["textFormat"]["strikethrough"]
+            for g in range(rc["range"]["startRowIndex"], rc["range"]["endRowIndex"]):
+                if g >= 1:  # grid row 0 is the header
+                    self._struck.add(g - 1) if on else self._struck.discard(g - 1)
+        return {"replies": [{} for _ in body["requests"]]}
 
     def fetch_sheet_metadata(self, params=None):
-        return {"sheets": [{"data": [{"rowData": self._row_marks}]}]}
+        if self._row_marks is not None:
+            return {"sheets": [{"data": [{"rowData": self._row_marks}]}]}
+        rows = [_cell()] + [_cell(strike=i in self._struck)
+                            for i in range(max(self._struck, default=0) + 2)]
+        return {"sheets": [{"data": [{"rowData": rows}]}]}
 
 
 def _cell(strike=False, bg=None):
@@ -492,11 +512,15 @@ def test_read_row_marks():
 
 def test_apply_row_marks_requests():
     ws = FakeWS("Noviembre 2026", [HEADER])
-    ws.spreadsheet = RecordingSS()
+    ws.spreadsheet = RecordingSS(struck={4})
     # Grid state before the write: rows 0-1 wear our amber, row 4 wears a line.
     flags = ["", "new", "cancelled", "cancelled", "struck", "new"]
     marks = sheets_client.apply_row_marks(ws, flags, prior_highlight={0, 1},
                                           prior_struck={4}, n_cols=len(HEADER))
+    # The verify read is reported separately; it found nothing to repair here.
+    assert marks.pop("verify") == {"passes": [{"pass": 0, "missing": 0,
+                                               "extra": 0}]}, marks
+    assert marks.pop("requests_sent") == marks.pop("requests_replied"), marks
     assert marks == {"struck": 2, "unstruck": 0, "struck_total": 3,
                      # The positions, not just the counts. A strike the code
                      # reported applying has come out missing on the live sheet,
@@ -613,9 +637,7 @@ def _run_repair(repair: bool):
     ws = FakeWS("Agosto 2026", [REPAIR_HEADER] + [list(r) for r in rows])
     # The grid claims data row 0 (a LIVE booking) is struck. It is not: the line slid
     # onto it when a row above was superseded on some earlier run.
-    marks = [_cell()] * (len(rows) + 1)
-    marks[1] = _cell(strike=True)             # grid row 2 == data row 0
-    ws.spreadsheet = RecordingSS(row_marks=marks)
+    ws.spreadsheet = RecordingSS(struck={0})  # grid row 2 == data row 0
     fake = FakeSS([ws])
     cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
            "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,
@@ -674,7 +696,7 @@ def test_repair_flag_survives_a_whole_month_of_cancellations():
     rows = [_repair_row("C%d" % i, "Prop %d" % i, "2026-08-%02d" % (10 + i))
             for i in range(20)]
     ws = FakeWS("Agosto 2026", [REPAIR_HEADER] + rows)
-    ws.spreadsheet = RecordingSS(row_marks=[_cell()] * (len(rows) + 1))
+    ws.spreadsheet = RecordingSS()
     fake = FakeSS([ws])
     cfg = {"sheet_id": "x", "sa_json": "{}", "worksheet": None, "template_tab": None,
            "client_id": "x", "client_secret": "y", "lookback": 400, "lookahead": 400,

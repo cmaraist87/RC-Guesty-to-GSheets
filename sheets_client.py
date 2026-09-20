@@ -500,16 +500,23 @@ def _fmt_request(ws, start_row: int, end_row: int, n_cols: int,
     }}
 
 
-def _apply_requests(ws, requests: list[dict]) -> None:
+def _apply_requests(ws, requests: list[dict]) -> dict | None:
+    """Send one formatting batch. Returns the API's response, or None.
+
+    The response matters: it carries one `replies` entry per request, so a batch
+    that came back short is visible instead of being assumed to have landed.
+    """
     if not requests:
-        return
+        return None
     ss = getattr(ws, "spreadsheet", None)
     if ss is None or not hasattr(ss, "batch_update"):
-        return  # offline / fake worksheet: nothing to paint
+        return None  # offline / fake worksheet: nothing to paint
     try:
-        with_retry(lambda: ss.batch_update({"requests": requests}), "applying formatting")
+        return with_retry(lambda: ss.batch_update({"requests": requests}),
+                          "applying formatting")
     except Exception as e:  # noqa: BLE001 - cosmetic; the values are already written
         print(f"   (could not apply row formatting on '{ws.title}': {e})")
+        return None
 
 
 def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
@@ -635,8 +642,15 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
                                          start_col=c))
             n_accents += 1
 
-    _apply_requests(ws, requests)
+    resp = _apply_requests(ws, requests)
+    sent = len(requests)
+    replied = len((resp or {}).get("replies") or []) if isinstance(resp, dict) else -1
+
+    verify = _verify_strikes(ws, should_strike, n, n_cols)
+
     return {"struck": len(strike_on), "unstruck": len(strike_off),
+            "requests_sent": sent, "requests_replied": replied,
+            "verify": verify,
             # The actual positions, not just how many. A strike the code reports
             # applying has repeatedly failed to appear on the grid, and the totals
             # cannot tell "never requested" from "requested and ignored".
@@ -644,6 +658,56 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
             "struck_total": len(should_strike),
             "highlighted": len(highlight_on), "unhighlighted": len(highlight_off),
             "accents": n_accents}
+
+
+def _verify_strikes(ws, should_strike: set, n: int, n_cols: int,
+                    passes: int = 2) -> dict:
+    """Read the lines back and repaint any that did not take.
+
+    The sync has been reporting more strikes than the sheet ends up carrying: on
+    2026-09-20 Octubre asked for 60 and read back 47, Septiembre 60 and read back
+    50, while every smaller tab matched exactly. Each of those misses is a
+    cancelled booking whose line is gone by morning, so the next run strikes it
+    again and counts it as a fresh cancellation.
+
+    Every other explanation has been eliminated by measurement -- the read sees
+    the tab's full height and every column, the batch is the run's last write, and
+    nothing in it can clear what an earlier request in the same batch struck. What
+    is left is that the batch does not always apply in full.
+
+    So stop assuming it did. Read, repaint what is missing, and read again. The
+    repaint is the same absolute statement the batch already made, so a run where
+    the first batch landed does nothing here beyond one extra read.
+    """
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
+        return {}  # offline / fake worksheet
+    log = []
+    for attempt in range(passes + 1):
+        try:
+            got, _hl, _ac = read_row_marks(ws)
+        except Exception as e:  # noqa: BLE001 - cosmetic; never fail the sync
+            print(f"   (could not verify row marks on '{ws.title}': {e})")
+            return {"error": str(e), "passes": log}
+        got = {i for i in got if i < n}
+        missing = sorted(should_strike - got)
+        extra = sorted(got - should_strike)
+        log.append({"pass": attempt, "missing": len(missing), "extra": len(extra)})
+        if not missing and not extra:
+            break
+        if attempt == passes:
+            print(f"   ('{ws.title}': {len(missing)} strike(s) and {len(extra)} "
+                  f"lift(s) still would not stick after {passes} repair pass(es))")
+            break
+        fix = []
+        for rows, on in ((missing, True), (extra, False)):
+            for a, b in _runs(rows):
+                fix.append(_fmt_request(
+                    ws, a + 1, b + 2, n_cols,
+                    {"textFormat": {"strikethrough": on}},
+                    "userEnteredFormat.textFormat.strikethrough"))
+        _apply_requests(ws, fix)
+    return {"passes": log}
 
 
 def ensure_grid(ws, n_rows: int, n_cols: int, checkbox_cols=()) -> int:

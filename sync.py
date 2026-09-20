@@ -817,6 +817,21 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
                 print(f"      STRIKE OFF ({len(off_rows)}): "
                       + "; ".join(_who(i) for i in off_rows[:40])
                       + (" ..." if len(off_rows) > 40 else ""))
+            # Whether the formatting batch actually landed. `sent` vs `replied`
+            # catches a batch the API answered short; the verify passes catch one
+            # it answered in full and did not apply.
+            v = marks.get("verify") or {}
+            if v.get("passes"):
+                first = v["passes"][0]
+                last = v["passes"][-1]
+                note = (f"      MARKS: {marks.get('requests_sent')} request(s) sent, "
+                        f"{marks.get('requests_replied')} reply(ies); "
+                        f"after the batch {first['missing']} strike(s) missing, "
+                        f"{first['extra']} extra")
+                if len(v["passes"]) > 1:
+                    note += (f"; after {len(v['passes']) - 1} repair pass(es) "
+                             f"{last['missing']} missing, {last['extra']} extra")
+                print(note)
             if marks.get("checkbox_cols"):
                 print(f"      applied the tickbox rule to "
                       f"{marks['checkbox_cols']} checkbox column(s).")
