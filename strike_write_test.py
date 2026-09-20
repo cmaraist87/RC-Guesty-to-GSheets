@@ -60,11 +60,49 @@ def paint(ws, rows_1based, on: bool, n_cols: int) -> int:
     return len((resp or {}).get("replies") or [])
 
 
+def _sequence(ws, first: int, n_cols: int, already: set) -> int:
+    """The sync's own order: write the values, then paint the marks.
+
+    Painting 450 blank rows in one batch worked perfectly, so the API is not
+    dropping requests and there is no batch-size limit in play. The only thing
+    left that separates a blank scratch row from a row the sync fails on is that
+    the sync writes VALUES to it moments earlier, with ws.update on A1 -- so do
+    exactly that here, on rows nobody looks at, and see whether the paint that
+    follows still lands.
+    """
+    size = 200
+    targets = list(range(first, first + size))
+    last = first + size - 1
+    rng = f"A{first}:{_col_letter(n_cols)}{last}"
+    body = [[f"seq-test {r}"] + [""] * (n_cols - 1) for r in targets]
+    print(f"
+SEQUENCE test: writing values to {rng}, then painting {size} rows")
+    try:
+        ws.update(range_name=rng, values=body, value_input_option="USER_ENTERED")
+        replies = paint(ws, targets, True, n_cols)
+        got = strikes_in(ws, first, last, n_cols) - already
+        took = len(got & set(targets))
+        print(f"  values then paint: {replies} replies, {took} of {size} landed   "
+              + ("all landed" if took == size else f"*** {size - took} LOST ***"))
+        if took < size:
+            print(f"      first rows that did not take: "
+                  f"{sorted(set(targets) - got)[:12]}")
+    finally:
+        paint(ws, targets, False, n_cols)
+        ws.batch_clear([rng])
+        left = strikes_in(ws, first, last, n_cols) - already
+        print(f"  cleaned up: {len(left)} mark(s) and the values removed.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tab", default="Octubre 2026")
     ap.add_argument("--confirm", action="store_true",
                     help="required; without it nothing is written")
+    ap.add_argument("--sequence", action="store_true",
+                    help="write VALUES to the band first, the way the sync does, "
+                         "then paint -- same rows, same order, same call shapes")
     args = ap.parse_args(argv)
 
     cfg = load_config()
@@ -97,6 +135,9 @@ def main(argv=None) -> int:
     if not args.confirm:
         print("\n--confirm not given; nothing was written.")
         return 0
+
+    if args.sequence:
+        return _sequence(ws, first, n_cols, already)
 
     painted: list[int] = []
     try:
