@@ -28,26 +28,41 @@ from sheets_client import _col_letter, month_worksheets, open_spreadsheet, read_
 from sync import load_config
 
 
-def per_column_strikes(ws, n_cols: int) -> dict[int, set[int]]:
-    """{data row -> set of column indices carrying a strikethrough}."""
+def _strike(fmt) -> bool:
+    return bool(((fmt or {}).get("textFormat") or {}).get("strikethrough"))
+
+
+def read_grid(ws, n_cols: int):
+    """(per-column effective strikes, per-column user-entered strikes, rule count).
+
+    Both formats, because they answer different questions. `userEnteredFormat` is
+    what we wrote; `effectiveFormat` is what the cell ends up with once the sheet's
+    own rules have had their say. If a row carries the line in the first and not
+    the second, our write landed and something on the sheet is overriding it.
+    """
     ss = ws.spreadsheet
     params = {
         "includeGridData": "true",
         "ranges": [f"'{ws.title}'!A:{_col_letter(n_cols)}"],
-        "fields": "sheets(data(rowData(values(effectiveFormat/textFormat/strikethrough))))",
+        "fields": "sheets(conditionalFormats,data(rowData(values("
+                  "effectiveFormat/textFormat/strikethrough,"
+                  "userEnteredFormat/textFormat/strikethrough))))",
     }
     meta = ss.fetch_sheet_metadata(params)
     sheets = meta.get("sheets") or []
-    data = ((sheets[0].get("data") or [{}])[0] if sheets else {})
-    out = {}
+    sheet0 = sheets[0] if sheets else {}
+    data = ((sheet0.get("data") or [{}])[0])
+    eff, user = {}, {}
     for i, rd in enumerate((data.get("rowData") or [])[1:]):  # skip header
-        cols = set()
-        for c, v in enumerate(rd.get("values") or []):
-            if ((v.get("effectiveFormat") or {}).get("textFormat") or {}).get("strikethrough"):
-                cols.add(c)
-        if cols:
-            out[i] = cols
-    return out
+        e = {c for c, v in enumerate(rd.get("values") or [])
+             if _strike(v.get("effectiveFormat"))}
+        u = {c for c, v in enumerate(rd.get("values") or [])
+             if _strike(v.get("userEnteredFormat"))}
+        if e:
+            eff[i] = e
+        if u:
+            user[i] = u
+    return eff, user, (sheet0.get("conditionalFormats") or [])
 
 
 def main(argv=None) -> int:
@@ -73,8 +88,22 @@ def main(argv=None) -> int:
           f"grid is {ws.row_count} x {ws.col_count}")
 
     struck_a, _hl, _ac = read_row_marks(ws)
-    by_col = per_column_strikes(ws, n_cols)
+    by_col, by_col_user, rules = read_grid(ws, n_cols)
     any_col = set(by_col)
+
+    print(f"  conditional format rules on this tab: {len(rules)}")
+    for r in rules[:10]:
+        rngs = ";".join(f"r{x.get('startRowIndex')}-{x.get('endRowIndex')}"
+                        f"c{x.get('startColumnIndex')}-{x.get('endColumnIndex')}"
+                        for x in (r.get("ranges") or []))
+        print(f"    {rngs}  {list((r.get('booleanRule') or r.get('gradientRule') or {}))}")
+
+    # The decisive comparison: what we wrote, against what the cell ends up with.
+    wrote_not_shown = sorted(set(by_col_user) - any_col)
+    shown_not_wrote = sorted(any_col - set(by_col_user))
+    print(f"  userEnteredFormat says struck : {len(by_col_user)} rows")
+    print(f"    written but NOT in effect   : {len(wrote_not_shown)} {wrote_not_shown[:20]}")
+    print(f"    in effect but NOT written   : {len(shown_not_wrote)} {shown_not_wrote[:20]}")
 
     print(f"  read_row_marks (column A only) : {len(struck_a)} rows")
     print(f"  struck on ANY column           : {len(any_col)} rows")
