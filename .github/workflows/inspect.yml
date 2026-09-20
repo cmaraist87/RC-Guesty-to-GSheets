@@ -29,6 +29,7 @@ on:
           - marks_audit       # does reading the marks see the whole tab?
           - strike_snapshot   # every struck row, diffable
           - strike_probe      # is the line on the whole row, or only part of it?
+          - filter_audit     # which rows a filter is hiding, per tab
           - strike_write_test # WRITES to blank rows below the data, then clears them
           - list_tabs         # every tab, its size and layout
       write:
@@ -146,6 +147,7 @@ jobs:
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
             strike_snapshot) python -u strike_snapshot.py ;;
+            filter_audit) python -u filter_audit.py --rows "${{ inputs.property }}" ;;
             strike_probe)
               TAB="${{ inputs.month }}"
               if [ -z "$TAB" ]; then TAB="Octubre 2026"; fi
