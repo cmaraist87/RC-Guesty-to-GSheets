@@ -44,7 +44,8 @@ def read_grid(ws, n_cols: int):
     params = {
         "includeGridData": "true",
         "ranges": [f"'{ws.title}'!A:{_col_letter(n_cols)}"],
-        "fields": "sheets(conditionalFormats,data(rowData(values("
+        "fields": "sheets(merges,protectedRanges,conditionalFormats,"
+                  "data(rowData(values("
                   "effectiveFormat/textFormat/strikethrough,"
                   "userEnteredFormat/textFormat/strikethrough))))",
     }
@@ -62,7 +63,9 @@ def read_grid(ws, n_cols: int):
             eff[i] = e
         if u:
             user[i] = u
-    return eff, user, (sheet0.get("conditionalFormats") or [])
+    return eff, user, {"rules": sheet0.get("conditionalFormats") or [],
+                       "merges": sheet0.get("merges") or [],
+                       "protected": sheet0.get("protectedRanges") or []}
 
 
 def main(argv=None) -> int:
@@ -91,12 +94,17 @@ def main(argv=None) -> int:
     by_col, by_col_user, rules = read_grid(ws, n_cols)
     any_col = set(by_col)
 
-    print(f"  conditional format rules on this tab: {len(rules)}")
-    for r in rules[:10]:
-        rngs = ";".join(f"r{x.get('startRowIndex')}-{x.get('endRowIndex')}"
-                        f"c{x.get('startColumnIndex')}-{x.get('endColumnIndex')}"
-                        for x in (r.get("ranges") or []))
-        print(f"    {rngs}  {list((r.get('booleanRule') or r.get('gradientRule') or {}))}")
+    print(f"  conditional format rules: {len(rules['rules'])}   "
+          f"merged cells: {len(rules['merges'])}   "
+          f"protected ranges: {len(rules['protected'])}")
+    for m in rules["merges"][:10]:
+        print(f"    merge rows {m.get('startRowIndex')}-{m.get('endRowIndex')} "
+              f"cols {m.get('startColumnIndex')}-{m.get('endColumnIndex')}")
+    for pr in rules["protected"][:10]:
+        rg = pr.get("range") or {}
+        print(f"    protected rows {rg.get('startRowIndex')}-{rg.get('endRowIndex')} "
+              f"warningOnly={pr.get('warningOnly')} "
+              f"editors={(pr.get('editors') or {}).get('users')}")
 
     # The decisive comparison: what we wrote, against what the cell ends up with.
     wrote_not_shown = sorted(set(by_col_user) - any_col)
