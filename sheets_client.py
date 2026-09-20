@@ -637,6 +637,10 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
 
     _apply_requests(ws, requests)
     return {"struck": len(strike_on), "unstruck": len(strike_off),
+            # The actual positions, not just how many. A strike the code reports
+            # applying has repeatedly failed to appear on the grid, and the totals
+            # cannot tell "never requested" from "requested and ignored".
+            "strike_on_rows": list(strike_on), "strike_off_rows": list(strike_off),
             "struck_total": len(should_strike),
             "highlighted": len(highlight_on), "unhighlighted": len(highlight_off),
             "accents": n_accents}

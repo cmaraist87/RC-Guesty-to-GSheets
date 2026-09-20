@@ -796,6 +796,27 @@ def run(dry_run: bool, reservations: list[dict], cfg: dict, ss=None,
                      if marks else "."))
             if marks.get("rows_added"):
                 print(f"      grew the tab by {marks['rows_added']} row(s) to fit.")
+            # Which rows the strike was actually requested for, by booking.
+            # A row flagged cancelled has repeatedly come out unstruck -- 4 Ashlyn
+            # on 2026-10-11 among them -- and every offline reproduction says that
+            # cannot happen. This prints what the live run really asked for, so the
+            # next morning's log settles whether the request was made at all.
+            on_rows = marks.get("strike_on_rows") or []
+            off_rows = marks.get("strike_off_rows") or []
+            if on_rows or off_rows:
+                def _who(i):
+                    if i >= len(full):
+                        return f"row {i + 2}: (past the last data row)"
+                    r = full.iloc[i]
+                    return (f"row {i + 2}: {str(r.get('Date',''))[:10]} "
+                            f"{str(r.get('Property','')).strip()} "
+                            f"{str(r.get('Confirmation Code','')).strip()}")
+                print(f"      STRIKE ON  ({len(on_rows)}): "
+                      + "; ".join(_who(i) for i in on_rows[:40])
+                      + (" ..." if len(on_rows) > 40 else ""))
+                print(f"      STRIKE OFF ({len(off_rows)}): "
+                      + "; ".join(_who(i) for i in off_rows[:40])
+                      + (" ..." if len(off_rows) > 40 else ""))
             if marks.get("checkbox_cols"):
                 print(f"      applied the tickbox rule to "
                       f"{marks['checkbox_cols']} checkbox column(s).")

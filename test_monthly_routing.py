@@ -498,6 +498,10 @@ def test_apply_row_marks_requests():
     marks = sheets_client.apply_row_marks(ws, flags, prior_highlight={0, 1},
                                           prior_struck={4}, n_cols=len(HEADER))
     assert marks == {"struck": 2, "unstruck": 0, "struck_total": 3,
+                     # The positions, not just the counts. A strike the code
+                     # reported applying has come out missing on the live sheet,
+                     # and a total cannot say whether it was ever requested.
+                     "strike_on_rows": [2, 3], "strike_off_rows": [],
                      "highlighted": 1, "unhighlighted": 1, "accents": 0}, marks
 
     got = [(r["repeatCell"]["fields"],
