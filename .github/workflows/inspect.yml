@@ -31,6 +31,7 @@ on:
           - strike_probe      # is the line on the whole row, or only part of it?
           - filter_audit     # which rows a filter is hiding, per tab
           - clear_filters    # REMOVES the filters that block the marks (needs write)
+          - restore_strikes  # re-strike rows repair_strikes lifted without evidence
           - strike_write_test # WRITES to blank rows below the data, then clears them
           - list_tabs         # every tab, its size and layout
       write:
@@ -153,6 +154,14 @@ jobs:
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
               python -u clear_filters.py $CONFIRM ;;
+            restore_strikes)
+              TAB="${{ inputs.month }}"
+              if [ -z "$TAB" ]; then TAB="Septiembre 2026"; fi
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              # `code` carries the comma-separated list. Guesty is asked
+              # about each one; only those it calls cancelled are struck.
+              python -u restore_strikes.py --tab "$TAB" --codes "${{ inputs.code }}" $CONFIRM ;;
             strike_probe)
               TAB="${{ inputs.month }}"
               if [ -z "$TAB" ]; then TAB="Octubre 2026"; fi

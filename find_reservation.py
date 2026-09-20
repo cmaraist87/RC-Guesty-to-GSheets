@@ -42,7 +42,8 @@ def main(argv=None) -> int:
     ap.add_argument("--days", type=int, default=400,
                     help="Unused; kept so older invocations do not break.")
     args = ap.parse_args(argv)
-    want = args.code.strip().upper()
+    given = args.code.strip()      # as typed: Guesty codes are case-SENSITIVE
+    want = given.upper()           # for comparing against what comes back
 
     cfg = load_config()
     from guesty_client import fetch_reservations
@@ -61,7 +62,10 @@ def main(argv=None) -> int:
     # running -- "operation exceeded time limit" -- which is a fair complaint about
     # a query that reads two years of reservations to find one.
     rows = fetch_reservations(token, filters=[
-        {"field": "confirmationCode", "operator": "$eq", "value": want},
+        # `given`, not the uppercased form. Guesty matches this field exactly, so
+        # asking for GY-N4QUX4ZI when the booking is GY-N4qUX4zi returns nothing
+        # and the tool reports "not in Guesty" for a reservation that is there.
+        {"field": "confirmationCode", "operator": "$eq", "value": given},
     # The sync's projection PLUS createdAt. Dropping the projection entirely was
     # worse than useless: without `fields` Guesty returns a trimmed reservation and
     # the listing, dates and status all came back empty, so every gate "failed".
