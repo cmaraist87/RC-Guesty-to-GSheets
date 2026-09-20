@@ -28,6 +28,7 @@ on:
           - property_check    # pipeline vs sheet, for one property
           - marks_audit       # does reading the marks see the whole tab?
           - strike_snapshot   # every struck row, diffable
+          - strike_probe      # is the line on the whole row, or only part of it?
           - list_tabs         # every tab, its size and layout
       write:
         description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
@@ -54,12 +55,12 @@ on:
           - Savannah
           - Thunderbolt
       month:
-        description: "connecteam ONLY: month tab (YYYY-MM, blank = current)"
+        description: "connecteam month (YYYY-MM); strike_probe: tab name e.g. Octubre 2026"
         required: false
         default: ""
         type: string
       property:
-        description: "property_check ONLY: property name or part of it"
+        description: "property_check: property name; strike_probe: grid rows e.g. 10,11,47,49"
         required: false
         default: ""
         type: string
@@ -144,6 +145,10 @@ jobs:
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
             strike_snapshot) python -u strike_snapshot.py ;;
+            strike_probe)
+              TAB="${{ inputs.month }}"
+              if [ -z "$TAB" ]; then TAB="Octubre 2026"; fi
+              python -u strike_probe.py --tab "$TAB" --rows "${{ inputs.property }}" ;;
             duplicates)
               ARGS2=""
               if [ "${{ inputs.scope }}" = "all" ]; then ARGS2="--all"; fi
