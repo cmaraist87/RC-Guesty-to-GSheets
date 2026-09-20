@@ -29,9 +29,10 @@ on:
           - marks_audit       # does reading the marks see the whole tab?
           - strike_snapshot   # every struck row, diffable
           - strike_probe      # is the line on the whole row, or only part of it?
+          - strike_write_test # WRITES to blank rows below the data, then clears them
           - list_tabs         # every tab, its size and layout
       write:
-        description: "bad_units / stale_moves ONLY: actually WRITE (rename / delete)"
+        description: "bad_units / stale_moves / strike_write_test: actually WRITE"
         required: false
         default: false
         type: boolean
@@ -149,6 +150,14 @@ jobs:
               TAB="${{ inputs.month }}"
               if [ -z "$TAB" ]; then TAB="Octubre 2026"; fi
               python -u strike_probe.py --tab "$TAB" --rows "${{ inputs.property }}" ;;
+            strike_write_test)
+              TAB="${{ inputs.month }}"
+              if [ -z "$TAB" ]; then TAB="Octubre 2026"; fi
+              # Only ever the scratch band: the script verifies every target
+              # row is blank and below the last data row, and clears them again.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              python -u strike_write_test.py --tab "$TAB" $CONFIRM ;;
             duplicates)
               ARGS2=""
               if [ "${{ inputs.scope }}" = "all" ]; then ARGS2="--all"; fi
