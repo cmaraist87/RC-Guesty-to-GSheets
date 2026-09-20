@@ -60,6 +60,50 @@ def paint(ws, rows_1based, on: bool, n_cols: int) -> int:
     return len((resp or {}).get("replies") or [])
 
 
+def _named_rows(ws, rows_1based, n_cols: int, confirm: bool) -> int:
+    """Paint the exact rows the sync cannot mark, then put them back.
+
+    Blank rows take the mark. Blank rows written to first take the mark. 450 of
+    them in one batch take the mark. The rows the sync fails on are ordinary data
+    rows scattered through the tab, and nothing about the tab explains it -- no
+    merges, no protected ranges, no conditional formats. So paint those rows, on
+    their own, and see what happens. Each is restored to the state it was found
+    in, so the tab is left exactly as it was.
+    """
+    lo, hi = min(rows_1based), max(rows_1based)
+    before = strikes_in(ws, lo, hi, n_cols)
+    print("")
+    print(f"NAMED ROWS test on {len(rows_1based)} row(s) {rows_1based}")
+    print(f"  struck to begin with: {sorted(before & set(rows_1based))}")
+    if not confirm:
+        print("  --confirm not given; nothing was written.")
+        return 0
+    try:
+        for target in (True, False):
+            todo = [r for r in rows_1based
+                    if (r in before) != target]   # only rows that must change
+            if not todo:
+                continue
+            replies = paint(ws, todo, target, n_cols)
+            now = strikes_in(ws, lo, hi, n_cols)
+            took = [r for r in todo if (r in now) == target]
+            print(f"  set strikethrough={target} on {todo}: {replies} reply(ies), "
+                  f"{len(took)} of {len(todo)} took")
+            if len(took) < len(todo):
+                print(f"      DID NOT TAKE: {[r for r in todo if r not in took]}")
+    finally:
+        back_on = sorted(r for r in rows_1based if r in before)
+        back_off = sorted(r for r in rows_1based if r not in before)
+        if back_on:
+            paint(ws, back_on, True, n_cols)
+        if back_off:
+            paint(ws, back_off, False, n_cols)
+        end = strikes_in(ws, lo, hi, n_cols)
+        same = (end & set(rows_1based)) == (before & set(rows_1based))
+        print(f"  restored to how it was found: {same}")
+    return 0
+
+
 def _sequence(ws, first: int, n_cols: int, already: set) -> int:
     """The sync's own order: write the values, then paint the marks.
 
@@ -100,6 +144,9 @@ def main(argv=None) -> int:
     ap.add_argument("--tab", default="Octubre 2026")
     ap.add_argument("--confirm", action="store_true",
                     help="required; without it nothing is written")
+    ap.add_argument("--rows", default="",
+                    help="paint THESE grid rows (the ones the sync cannot mark), "
+                         "read them back, then restore each to how it was found")
     ap.add_argument("--sequence", action="store_true",
                     help="write VALUES to the band first, the way the sync does, "
                          "then paint -- same rows, same order, same call shapes")
@@ -136,6 +183,9 @@ def main(argv=None) -> int:
         print("\n--confirm not given; nothing was written.")
         return 0
 
+    want = [int(x) for x in args.rows.split(",") if x.strip().isdigit()]
+    if want:
+        return _named_rows(ws, want, n_cols, args.confirm)
     if args.sequence:
         return _sequence(ws, first, n_cols, already)
 

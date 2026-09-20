@@ -161,7 +161,9 @@ jobs:
               # first, the way the sync does, then paints. Both are cleared.
               SEQ=""
               if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then SEQ="--sequence"; fi
-              python -u strike_write_test.py --tab "$TAB" $CONFIRM $SEQ ;;
+              ROWS=""
+              if [ -n "${{ inputs.property }}" ]; then ROWS="--rows ${{ inputs.property }}"; fi
+              python -u strike_write_test.py --tab "$TAB" $CONFIRM $SEQ $ROWS ;;
             duplicates)
               ARGS2=""
               if [ "${{ inputs.scope }}" = "all" ]; then ARGS2="--all"; fi
