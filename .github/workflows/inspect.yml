@@ -157,7 +157,11 @@ jobs:
               # row is blank and below the last data row, and clears them again.
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
-              python -u strike_write_test.py --tab "$TAB" $CONFIRM ;;
+              # The sequence variant writes VALUES to the same blank band
+              # first, the way the sync does, then paints. Both are cleared.
+              SEQ=""
+              if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then SEQ="--sequence"; fi
+              python -u strike_write_test.py --tab "$TAB" $CONFIRM $SEQ ;;
             duplicates)
               ARGS2=""
               if [ "${{ inputs.scope }}" = "all" ]; then ARGS2="--all"; fi
