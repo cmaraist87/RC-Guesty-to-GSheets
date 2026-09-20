@@ -27,7 +27,8 @@ class Grid:
     quietly ignores part of a batch is exactly what production looks like.
     """
 
-    def __init__(self, n_rows, drop=lambda batch, row: False, struck=()):
+    def __init__(self, n_rows, drop=lambda batch, row: False, struck=(),
+                 hidden=()):
         self.title = "Octubre 2026"
         self.id = 1
         self.row_count, self.col_count = n_rows + 50, N_COLS
@@ -37,12 +38,20 @@ class Grid:
         self.drop = drop
         self.batches = 0
         self.reads = 0
+        # Data rows a filter is hiding. Sheets accepts a repeatCell over one and
+        # does not apply it -- which is the whole bug, so the fake does the same.
+        self.hidden = set(hidden)
+        self.has_filter = bool(hidden)
 
     def batch_update(self, body):
         self.batches += 1
         replies = []
         for req in body.get("requests", []):
             replies.append({})
+            if "clearBasicFilter" in req:
+                self.has_filter = False
+                self.hidden = set()      # nothing is hidden once the filter goes
+                continue
             rc = req.get("repeatCell")
             if not rc or "strikethrough" not in rc.get("fields", ""):
                 continue
@@ -52,10 +61,20 @@ class Grid:
                 data_row = grid_row - 1
                 if data_row < 0 or self.drop(self.batches, data_row):
                     continue
+                if data_row in self.hidden:
+                    continue             # accepted, replied to, silently ignored
                 self.struck.add(data_row) if on else self.struck.discard(data_row)
         return {"replies": replies}
 
     def fetch_sheet_metadata(self, params):
+        if "basicFilter" in (params or {}).get("fields", ""):
+            sh = {"properties": {"sheetId": self.id}}
+            if self.has_filter:
+                sh["basicFilter"] = {"range": {"sheetId": self.id}}
+            return {"sheets": [sh]}
+        return self._grid_metadata()
+
+    def _grid_metadata(self):
         self.reads += 1
         rows = [{"values": [{} for _ in range(N_COLS)]}]          # header
         for i in range(self.n_rows):
@@ -139,6 +158,53 @@ def test_an_offline_worksheet_still_works():
     print("OK: a worksheet with no API behind it verifies nothing and raises nothing")
 
 
+def test_a_filter_hiding_rows_is_cleared_before_the_marks():
+    """The 2026-09-20 root cause, pinned.
+
+    Sheets accepts a repeatCell over a filter-hidden row, replies to it, and
+    leaves the row alone. Octubre asked for 66 strikes and carried 47; all 26
+    rows that refused were hidden, none outside the hidden set failed.
+    """
+    want = {8, 12, 46, 531}
+    grid = Grid(600, hidden={8, 46})
+    out = apply_row_marks(grid, flags(600, want), set(), set(), N_COLS)
+
+    assert grid.struck == want, ("a hidden row must still end up struck",
+                                 sorted(grid.struck))
+    assert not grid.has_filter, "the filter should have been cleared"
+    assert out["verify"]["passes"][-1]["missing"] == 0, out["verify"]
+    print("OK: the filter comes off first, so hidden rows take the mark")
+
+
+def test_the_clear_is_ordered_ahead_of_every_mark():
+    """Order is the whole point: clearing after the paint would fix nothing."""
+    seen = []
+    grid = Grid(300, hidden={5})
+    real = grid.batch_update
+
+    def spy(body):
+        seen.append([next(iter(r)) for r in body.get("requests", [])])
+        return real(body)
+
+    grid.batch_update = spy
+    apply_row_marks(grid, flags(300, {5, 200}), set(), set(), N_COLS)
+    assert seen[0][0] == "clearBasicFilter", seen[0][:3]
+    assert "repeatCell" in seen[0][1:], seen[0][:3]
+    print("OK: clearBasicFilter is the first request in the same batch")
+
+
+def test_a_tab_with_no_filter_is_left_alone():
+    """No filter, no clearBasicFilter -- the sync does not touch what is not there."""
+    seen = []
+    grid = Grid(300)
+    real = grid.batch_update
+    grid.batch_update = lambda b: (seen.append([next(iter(r)) for r in b["requests"]])
+                                   or real(b))
+    apply_row_marks(grid, flags(300, {7}), set(), set(), N_COLS)
+    assert all("clearBasicFilter" not in reqs for reqs in seen), seen
+    print("OK: a tab with no filter is left exactly as it was")
+
+
 if __name__ == "__main__":
     test_a_batch_that_half_applies_is_repaired()
     test_a_lift_that_does_not_stick_is_repeated()
@@ -146,4 +212,7 @@ if __name__ == "__main__":
     test_a_sheet_that_never_takes_the_strike_gives_up_and_says_so()
     test_the_reply_count_is_reported()
     test_an_offline_worksheet_still_works()
+    test_a_filter_hiding_rows_is_cleared_before_the_marks()
+    test_the_clear_is_ordered_ahead_of_every_mark()
+    test_a_tab_with_no_filter_is_left_alone()
     print("\nALL STRIKE VERIFY TESTS PASSED")

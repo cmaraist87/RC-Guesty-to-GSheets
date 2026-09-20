@@ -519,6 +519,42 @@ def _apply_requests(ws, requests: list[dict]) -> dict | None:
         return None
 
 
+def _filter_clearing_request(ws) -> list[dict]:
+    """A clearBasicFilter for this tab, if it has one, else nothing.
+
+    Sheets does not apply a repeatCell format to a row a filter is hiding. The
+    request is accepted, a reply comes back for it, and the row does not change.
+    Measured 2026-09-20: Octubre asked for 66 strikes and carried 47, and all 26
+    rows that refused the mark were hidden by the tab's filter, while no row
+    outside the hidden set failed. Tabs with nothing hidden missed nothing.
+
+    That is not cosmetic. A live booking keeping a line it should have lost reads
+    back next run as already cancelled, gets skipped, and is re-added: Octubre
+    grew 1373 -> 1384 -> 1395 rows over three runs in one afternoon.
+
+    So the filter comes off first, in the same batch as the marks, where it is
+    ordered ahead of them and cannot half-happen. The team can filter while they
+    work; the nightly run clears it, and says so in the log.
+    """
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None or not hasattr(ss, "fetch_sheet_metadata"):
+        return []
+    try:
+        meta = ss.fetch_sheet_metadata(
+            {"fields": "sheets(properties(sheetId),basicFilter)"})
+    except Exception as e:  # noqa: BLE001 - never fail the sync over a filter
+        print(f"   (could not check '{ws.title}' for a filter: {e})")
+        return []
+    for sh in meta.get("sheets") or []:
+        if (sh.get("properties") or {}).get("sheetId") != ws.id:
+            continue
+        if sh.get("basicFilter"):
+            print(f"   ('{ws.title}' had a filter on it; clearing it so the "
+                  f"marks can be applied to the rows it was hiding)")
+            return [{"clearBasicFilter": {"sheetId": ws.id}}]
+    return []
+
+
 def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
                     prior_struck: set, n_cols: int,
                     clear_from: int | None = None,
@@ -642,6 +678,9 @@ def apply_row_marks(ws, row_flags: list[str], prior_highlight: set,
                                          start_col=c))
             n_accents += 1
 
+    # Ahead of every mark, because a row the filter hides silently refuses them.
+    if requests:
+        requests = _filter_clearing_request(ws) + requests
     resp = _apply_requests(ws, requests)
     sent = len(requests)
     replied = len((resp or {}).get("replies") or []) if isinstance(resp, dict) else -1
