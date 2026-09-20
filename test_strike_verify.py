@@ -104,7 +104,8 @@ def test_a_batch_that_lands_costs_one_read_and_no_repair():
     assert grid.struck == want, sorted(grid.struck)
     assert grid.batches == 1, f"repaired a sheet that was already right: {grid.batches}"
     assert grid.reads == 1, grid.reads
-    assert out["verify"]["passes"] == [{"pass": 0, "missing": 0, "extra": 0}]
+    assert out["verify"]["passes"] == [{"pass": 0, "missing": 0, "extra": 0,
+                                        "missing_rows": [], "extra_rows": []}]
     print("OK: a batch that landed is verified once and not repainted")
 
 

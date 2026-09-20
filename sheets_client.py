@@ -692,7 +692,8 @@ def _verify_strikes(ws, should_strike: set, n: int, n_cols: int,
         got = {i for i in got if i < n}
         missing = sorted(should_strike - got)
         extra = sorted(got - should_strike)
-        log.append({"pass": attempt, "missing": len(missing), "extra": len(extra)})
+        log.append({"pass": attempt, "missing": len(missing), "extra": len(extra),
+                    "missing_rows": missing, "extra_rows": extra})
         if not missing and not extra:
             break
         if attempt == passes:
@@ -706,6 +707,18 @@ def _verify_strikes(ws, should_strike: set, n: int, n_cols: int,
                     ws, a + 1, b + 2, n_cols,
                     {"textFormat": {"strikethrough": on}},
                     "userEnteredFormat.textFormat.strikethrough"))
+        if attempt == 0:
+            # The exact ranges, once. Three passes have now reported the same
+            # counts, so the question is no longer how many but whether the range
+            # being asked for is the range the read is looking at.
+            shown = [(r["repeatCell"]["range"]["startRowIndex"],
+                      r["repeatCell"]["range"]["endRowIndex"],
+                      r["repeatCell"]["range"]["startColumnIndex"],
+                      r["repeatCell"]["range"]["endColumnIndex"],
+                      r["repeatCell"]["range"]["sheetId"])
+                     for r in fix[:6]]
+            print(f"   ('{ws.title}' repair asks sheetId={getattr(ws, 'id', '?')} for "
+                  f"{len(fix)} range(s); first: {shown})")
         _apply_requests(ws, fix)
     return {"passes": log}
 

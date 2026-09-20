@@ -518,8 +518,9 @@ def test_apply_row_marks_requests():
     marks = sheets_client.apply_row_marks(ws, flags, prior_highlight={0, 1},
                                           prior_struck={4}, n_cols=len(HEADER))
     # The verify read is reported separately; it found nothing to repair here.
-    assert marks.pop("verify") == {"passes": [{"pass": 0, "missing": 0,
-                                               "extra": 0}]}, marks
+    assert marks.pop("verify") == {"passes": [{"pass": 0, "missing": 0, "extra": 0,
+                                               "missing_rows": [],
+                                               "extra_rows": []}]}, marks
     assert marks.pop("requests_sent") == marks.pop("requests_replied"), marks
     assert marks == {"struck": 2, "unstruck": 0, "struck_total": 3,
                      # The positions, not just the counts. A strike the code
