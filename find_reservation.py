@@ -65,7 +65,8 @@ def main(argv=None) -> int:
     # The sync's projection PLUS createdAt. Dropping the projection entirely was
     # worse than useless: without `fields` Guesty returns a trimmed reservation and
     # the listing, dates and status all came back empty, so every gate "failed".
-    ], fields=requested_fields() + " createdAt confirmedAt")
+    ], fields=requested_fields() + " createdAt confirmedAt canceledAt "
+              "cancelledAt tags status plannedArrival")
     print(f"Guesty returned {len(rows)} reservation(s) for that code.")
 
     if not rows:
@@ -104,6 +105,14 @@ def main(argv=None) -> int:
         print(f"      {path:<28} {val!r}")
     print(f"   check-in : {ci}    check-out: {co}")
     print(f"   status   : {status}")
+    # Guesty lets a booking be cancelled by applying a TAG while its status stays
+    # 'confirmed'. The sync only ever tests status, so such a booking stays in the
+    # live set and its row is never struck -- reported on 1123 Marais HMWRPKHR4Q,
+    # 2026-10-01, which showed as a live double-booking against another guest.
+    print(f"   tags     : {r.get('tags')!r}")
+    for path in ("canceledAt", "cancelledAt"):
+        if _dig(r, path):
+            print(f"   {path:<9}: {_dig(r, path)}")
     # WHEN the booking appeared decides whether the sync could ever have seen it.
     # A reservation created after a morning run is simply not in that run's fetch,
     # and that is not a defect -- the sheet is a daily snapshot.
