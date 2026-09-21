@@ -28,7 +28,9 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 | 2026-09-21 | 1.5 | Card redesign, as asked: the property moves out of the shift **title** into the **Job** field, and the end time goes. Established against the API what it would actually allow -- a shift with no `endTime` is refused ("Field required"), so is one whose end equals its start, and so is an empty or absent `title`; a 15-minute block is accepted. So the card is now a 15-minute marker that states a start time without claiming how long a property takes, and the title carries the job KIND (Clean / Turnover) since it cannot be blank. Built `connecteam_jobs.py` to match a property to a Job: ~1429 Jobs typed in by hand, so names are compared on the identifying part and the highest version wins (Chris' rule). Austin October previews 38 cards across 8 properties. | ✅ |
 | 2026-09-21 | 0.5 | Caught two defects the redesign introduced before anything was pushed. The duplicate guard keyed on (title, start), which was sound while the title held the property -- with every title now "Clean", seven Austin cleans at 11:00 on 18 October collapsed to one key, so six would be skipped forever and a deleted card could never come back; the key is now (jobId, title, start). The preview had the same blind spot and printed 38 identical lines, so it now names the property. Both covered by tests. | ✅ |
 
-**Total to date: 7.75 h**
+| 2026-09-21 | 0.75 | **First write to a real crew board.** Established first that a Connecteam Job belongs to the board that owns it -- a jobId Connecteam itself had put on the Austin board was refused by the test board -- so the test board, which owns none, could never validate a card carrying a property, and Chris accepted a live Austin test. Read the Austin board first: 0 cards in October, so nothing of the team's could be duplicated. Opened a deliberate market path in the workflow (spelled out, not a boolean; the comment claiming none existed was corrected). First attempt died on a shell quoting error before Python ran, so nothing was written. Second: **38 Austin cards created, all Unassigned, every one carrying its property as a Job.** Re-ran it -- all 38 recognised, 0 created -- which proves the rewritten duplicate key on live data. | ✅ |
+
+**Total to date: 8.5 h**
 
 > Phase 1 work continues alongside and is **not** billed here.
 
@@ -56,9 +58,11 @@ not only what is spent.
 - ~~Decide whether a card with no Job attached is acceptable~~ — **settled**: no Job, no card; the property is reported for the team to create
 - **Team to create 3 Austin Jobs**: 1802 Martin Luther King, 4807 Prock B, 4807 Prock C (only the first has an October clean)
 - Clean up ~6 `PROBE` shifts left on the test board, dated 2027-06-01 — needs a delete path, which does not exist yet
-- Decide where the first market write happens: the test board cannot validate `jobId` (it rejects the account-wide Jobs as "does not exist")
+- ~~Decide where the first market write happens~~ — **done**: Austin, live, on Chris' call
+- **Delete path** — needed to clear the ~7 `PROBE` shifts and the 37 old-design cards on the test board, and for the job lifecycle
+- Verify how the card renders on a crew phone now the title is Clean/Turnover and the place is the Job
 - Job lifecycle: update and delete when a booking moves or cancels
-- First write to a **market** board
+- ~~First write to a **market** board~~ — **done 2026-09-21**, Austin October, 38 cards
 - Job lifecycle: update and delete a pushed job when the booking moves or cancels
 - Link each sheet row to its Connecteam job so a later run can find it again
 - Decide the rolling push window **(now blocking the first live push)**
