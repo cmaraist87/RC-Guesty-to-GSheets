@@ -104,11 +104,14 @@ def main(argv=None) -> int:
         if not args.confirm:
             continue
         try:
+            # A bare ARRAY, the way create_shifts sends it. Wrapping it in
+            # {"shifts": [...]} is rejected with error_code 1002 -- which the
+            # baseline shape caught, since that one is known to work.
             got = client._request(
                 "POST", f"/scheduler/v1/schedulers/{TEST_SCHEDULER}/shifts",
-                body={"shifts": [payload]}, tries=1)
+                body=[payload], tries=1)
         except ConnecteamError as e:
-            print(f"    REJECTED: {e}")
+            print(f"    REJECTED: {str(e)[:600]}")
             continue
         rows = client._rows(got) or []
         if not rows:
