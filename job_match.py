@@ -27,6 +27,7 @@ import sys
 from collections import defaultdict
 
 from connecteam_client import ConnecteamClient, check_api_key
+from processing import EXCLUDE_PROPERTIES, _canonical_key
 from connecteam_map import scheduler_for
 from sheets_client import month_worksheets, open_spreadsheet, read_as_dataframe
 from sync import load_config
@@ -75,7 +76,11 @@ def main(argv=None) -> int:
             if not checkout:
                 continue              # arrival-only day: no clean, no card
             prop = str(r.get("Property", "")).strip()
-            if prop:
+            # A property on the do-not-clean list needs no Job: RC does not
+            # service it. Old tabs still carry rows from before it was excluded
+            # -- 4807 Prock B and C were reported as missing Jobs on 2026-09-21
+            # for exactly that reason, and there is nothing to create.
+            if prop and _canonical_key(prop) not in _EXCLUDED:
                 wanted.append(prop)
 
     props = sorted(set(wanted))
@@ -128,6 +133,8 @@ def main(argv=None) -> int:
     print("  Nothing was changed.")
     return 0
 
+
+_EXCLUDED = {_canonical_key(p) for p in EXCLUDE_PROPERTIES}
 
 _MONTHS = {"01": "enero", "02": "febrero", "03": "marzo", "04": "abril",
            "05": "mayo", "06": "junio", "07": "julio", "08": "agosto",
