@@ -27,6 +27,7 @@ on:
           - job_fields        # what a Job looks like; can we create one?
           - job_create        # CREATE the Jobs the TEST board is missing
           - job_share        # can a Job be added to a second board? (our Job only)
+          - job_share_run    # ADD the test board to existing Jobs (reversible)
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
           - board_peek       # every card on one board, by id (read-only)
           - shift_fields     # our card beside the team's, field by field
@@ -163,6 +164,17 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            job_share_run)
+              MONTH=""
+              if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              # `code` = "revert" takes the test board back off again;
+              # `from` optionally limits how many are touched.
+              EXTRA=""
+              if [ "${{ inputs.code }}" = "revert" ]; then EXTRA="--revert"; fi
+              if [ -n "${{ inputs.from }}" ]; then EXTRA="$EXTRA --limit ${{ inputs.from }}"; fi
+              python -u job_share.py --city "${{ inputs.city }}" $MONTH $EXTRA $CONFIRM ;;
             job_share)
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
