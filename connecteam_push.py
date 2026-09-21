@@ -20,7 +20,7 @@ import os
 import sys
 
 from connecteam_client import ConnecteamClient, ConnecteamError
-from connecteam_jobs import build_index, resolve
+from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
                             shifts_by_scheduler)
 from sheet_merge import norm_city
@@ -100,9 +100,13 @@ def main(argv=None) -> int:
     client = ConnecteamClient(key)
     board_for_jobs = TEST_SCHEDULER if args.test else board
     all_jobs, how = client.list_jobs(board_for_jobs)
-    job_index = build_index(all_jobs)
-    print(f"{len(all_jobs)} Job(s) readable [{how}]; "
-          f"{len(job_index)} distinct name(s).")
+    # Scoped to the board being written to, and with the soft-deleted dropped.
+    # The account-wide list is a superset three times over: 506 of 1429 are
+    # deleted, and the rest belong to nine different boards.
+    job_index = build_index(all_jobs, board=board_for_jobs)
+    print(f"{len(all_jobs)} Job(s) on the account [{how}]; "
+          f"{len(usable(all_jobs, board_for_jobs))} usable on board "
+          f"{board_for_jobs}; {len(job_index)} distinct name(s).")
 
     groups = shifts_by_scheduler(rows, only_city=args.city, job_index=job_index)
     jobs = groups.get(board, [])

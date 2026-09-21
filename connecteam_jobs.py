@@ -49,10 +49,43 @@ def version_of(name: str) -> int:
     return max((int(v) for v in found), default=0)
 
 
-def build_index(jobs) -> dict[str, list[tuple[str, str]]]:
-    """{comparable name -> [(jobId, raw name)]} for every Job on the board."""
-    index: dict[str, list[tuple[str, str]]] = defaultdict(list)
+def usable(jobs, board: str | None = None) -> list[dict]:
+    """The Jobs a card on `board` may actually point at.
+
+    /jobs/v1/jobs answers for the whole ACCOUNT, and two thirds of what it
+    returns cannot be used on any given board:
+
+      * `isDeleted` -- 506 of the 1429 on this account are soft-deleted. They
+        still come back from the list. Pointing a card at one is refused with
+        "job_id ... does not exist", which is what happened on 2026-09-21 and
+        sent the whole investigation down the wrong road.
+      * `instanceIds` -- the boards a Job belongs to. Austin owns 35, the test
+        board owns 3, New Orleans 722. A Job from another board is refused the
+        same way.
+
+    Both were being ignored. The Austin push of 2026-09-21 landed only because
+    the eight Jobs it happened to pick were live and Austin's.
+    """
+    out = []
     for j in jobs or ():
+        if j.get("isDeleted"):
+            continue
+        if board is not None:
+            ids = {str(i) for i in (j.get("instanceIds") or ())}
+            if str(board) not in ids:
+                continue
+        out.append(j)
+    return out
+
+
+def build_index(jobs, board: str | None = None) -> dict[str, list[tuple[str, str]]]:
+    """{comparable name -> [(jobId, raw name)]} for the Jobs `board` can use.
+
+    Pass `board` -- without it the index spans the account and can hand back a
+    Job the target board will refuse.
+    """
+    index: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for j in usable(jobs, board):
         name = j.get("name") or j.get("title") or j.get("jobName") or ""
         jid = j.get("jobId") or j.get("id")
         if name and jid:
