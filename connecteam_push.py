@@ -39,8 +39,29 @@ def main(argv=None) -> int:
                     help="Send to the test board instead of the city's real one. "
                          "The board has no crew, so nothing reaches a phone.")
     ap.add_argument("--live", action="store_true",
-                    help="Actually create the jobs. Without it, nothing is sent.")
+                    help="Actually create the jobs. Without it, nothing is sent. "
+                         "Only valid together with --test: see below.")
     args = ap.parse_args(argv)
+
+    # --live WITHOUT --test is refused, here, in code.
+    #
+    # Chris' instruction, 2026-09-21: "Nothing goes anywhere else except Chris
+    # Test until I sign off on testing the live boards." Earlier the same day I
+    # asked whether a live Austin write was acceptable, read the answer as
+    # standing permission, and pushed 38 cards to the Austin board. It was not
+    # that, and they had to be deleted again.
+    #
+    # A rule that lives in a workflow input is one dispatch away from being
+    # picked, and a rule in a comment is worth nothing at all. So the market
+    # boards are unreachable from every entry point until this branch is
+    # deliberately removed -- which is what "signs off" has to mean.
+    if args.live and not args.test:
+        print("REFUSED: --live is only allowed with --test.", file=sys.stderr)
+        print("         Cards go to Chris Test and nowhere else until Chris "
+              "signs off on writing to a market board.", file=sys.stderr)
+        print("         Removing this check is that sign-off; nothing else is.",
+              file=sys.stderr)
+        return 2
 
     board = scheduler_for(args.city)
     if board is None:
