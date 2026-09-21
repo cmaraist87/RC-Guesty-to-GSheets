@@ -157,7 +157,7 @@ jobs:
               elif [ "${{ inputs.connecteam_write }}" = "WRITE-TO-MARKET-BOARD-LIVE" ]; then
                 # A REAL crew board. There is no delete path in this repo, so a
                 # card written here is removed by hand or not at all.
-                echo "::warning::Writing to ${{ inputs.city }}'"'"'s REAL board."
+                echo "::warning::Writing to the REAL board for ${{ inputs.city }}."
                 echo "::warning::Cards will appear on a crew board. Unassigned, but real."
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --live
               else
