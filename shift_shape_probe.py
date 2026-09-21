@@ -129,6 +129,45 @@ def main(argv=None) -> int:
         print("   no board-scoped Job found; jobId shapes will be skipped.")
     print()
 
+    # Is the test board rejecting THAT Job, or every Job?
+    #
+    # The one tried on 2026-09-21 came from /jobs/v1/jobs, which answers for the
+    # whole account, and the board said "does not exist". That is one data point
+    # with one Job, and it could as easily mean the Job is archived as that Jobs
+    # belong to boards. A jobId Connecteam itself put on the Austin board settles
+    # it: if the test board refuses that too, Jobs are board-scoped and the test
+    # board needs its own before it can test anything.
+    from connecteam_map import CITY_SCHEDULERS
+    austin = CITY_SCHEDULERS.get("austin") or CITY_SCHEDULERS.get("Austin")
+    in_use = ""
+    if austin:
+        try:
+            live_shifts = client.existing_shifts(austin, 1_756_684_800, 1_798_761_600)
+            in_use = next((str(sh["jobId"]) for sh in live_shifts if sh.get("jobId")), "")
+        except ConnecteamError as e:
+            print(f"   (could not read the Austin board: {e})")
+    if in_use:
+        print(f"a Job in use on the Austin board: {in_use}")
+        probe = {"timezone": TZ, "isOpenShift": True, "assignedUserIds": [],
+                 "openSpots": 1, "isPublished": True, "title": "PROBE austin job",
+                 "jobId": in_use,
+                 "startTime": int((WHEN + timedelta(hours=20)).timestamp()),
+                 "endTime": int((WHEN + timedelta(hours=20)).timestamp()) + 900}
+        print("--- austin_job_on_test_board: is the Job valid anywhere, or only "
+              "on its own board?")
+        if args.confirm:
+            try:
+                client._request(
+                    "POST", f"/scheduler/v1/schedulers/{TEST_SCHEDULER}/shifts",
+                    body=[probe], tries=1)
+                print("    ACCEPTED -> Jobs are account-wide; the earlier refusal "
+                      "was about that particular Job, not the board.")
+            except ConnecteamError as e:
+                print(f"    REJECTED -> {str(e)[:300]}")
+                print("    Jobs are scoped to a board. The test board needs its "
+                      "own before it can test a jobId.")
+    print()
+
     for label, why, payload in shapes(job_id):
         if "jobId" in payload and not job_id:
             continue                    # nothing valid to point at on this board
