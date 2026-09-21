@@ -190,6 +190,15 @@ class ConnecteamClient:
         while barely half have a title. The exact path is not documented for this
         account's plan, so the likely ones are tried in turn and the one that
         answers is reported, rather than guessing in silence.
+
+        CAUTION: the path that answers, /jobs/v1/jobs, is ACCOUNT-WIDE, but a Job
+        is only usable on the board that owns it. Proved on 2026-09-21: a jobId
+        Connecteam itself had put on the Austin board was refused by the test
+        board with "job_id ... does not exist". Both board-scoped paths 404 on
+        this plan, so there is no way to ask which Jobs a given board will accept
+        -- this list is a superset, and a jobId taken from it can still be
+        rejected at write time. The test board owns none at all, which is why it
+        cannot exercise a card that carries a property.
         """
         tried: list[str] = []
         for path in ("/jobs/v1/jobs",
