@@ -45,12 +45,30 @@ def missing_for(rows, city: str, index) -> list[str]:
     return sorted(out)
 
 
-def create_jobs(client, board: str, names) -> list[dict]:
-    """One request, an array of Jobs, each pinned to this board."""
-    body = [{"title": n, "instanceIds": [int(board)]} for n in names]
-    got = client._request("POST", "/jobs/v1/jobs", body=body)
-    data = (got or {}).get("data") or {}
-    return data.get("jobs") or client._rows(got) or []
+def create_jobs(client, board: str, names):
+    """(created, [(name, why not)]) -- one request PER NAME, deliberately.
+
+    Job titles are unique account-wide, including against the 506 soft-deleted
+    ones, so a name Austin already uses cannot be created again. Sent as a batch
+    the whole request is refused with "one or more parent names already exist"
+    and nothing says which, so the names that ARE free never get created. One
+    call per name costs a little more and says exactly where we stand.
+    """
+    made, refused = [], []
+    for n in names:
+        body = [{"title": n, "instanceIds": [int(board)]}]
+        try:
+            got = client._request("POST", "/jobs/v1/jobs", body=body, tries=1)
+        except ConnecteamError as e:
+            detail = str(e)
+            why = ("the name is already taken account-wide"
+                   if "already exist" in detail else detail[:120])
+            refused.append((n, why))
+            continue
+        rows = ((got or {}).get("data") or {}).get("jobs") or client._rows(got) or []
+        made.extend(rows)
+    return made, refused
+
 
 
 def main(argv=None) -> int:
@@ -93,14 +111,20 @@ def main(argv=None) -> int:
         print("\n--confirm not given; nothing was created.")
         return 0
 
-    try:
-        made = create_jobs(client, args.board, names)
-    except ConnecteamError as e:
-        print(f"\n!! {e}", file=sys.stderr)
-        return 1
-    print(f"\nCreated {len(made)} Job(s) on board {args.board}:")
+    made, refused = create_jobs(client, args.board, names)
+    print("")
+    print(f"Created {len(made)} Job(s) on board {args.board}:")
     for j in made:
         print(f"   {j.get('jobId')}  {j.get('title')}")
+    if refused:
+        print("")
+        print(f"{len(refused)} could NOT be created:")
+        for n, why in refused:
+            print(f"   {n:<30} {why}")
+        print("   A name Austin already uses cannot be created a second time.")
+        print("   Those Jobs have to be SHARED onto this board instead, by")
+        print("   adding this board to their instanceIds -- which edits a")
+        print("   record the team owns, so it is not done here.")
     return 0
 
 
