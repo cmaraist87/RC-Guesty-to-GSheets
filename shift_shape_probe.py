@@ -74,9 +74,18 @@ def shapes(job_id: str):
          "endTime EQUAL to startTime -- a card with no duration at all",
          dict(base, title="PROBE zero", startTime=at(10), endTime=at(10))),
         ("fifteen_min",
-         "a 15-minute block -- short enough to read as a start time",
+         "a 15-minute block -- ANSWERED 2026-09-21: accepted",
          dict(base, title="PROBE 15min", startTime=at(12),
               endTime=at(12) + 900)),
+        # The title question on its own. The earlier attempt bundled it with a
+        # jobId and failed on the jobId, so it proved nothing. Once the property
+        # moves to the Job field there is nothing left for the title to say.
+        ("empty_title",
+         "title sent as an empty string, no jobId in the way",
+         dict(base, title="", startTime=at(14), endTime=at(14) + 900)),
+        ("no_title_key",
+         "title omitted entirely, no jobId in the way",
+         dict(base, startTime=at(16), endTime=at(16) + 900)),
     ]
 
 
