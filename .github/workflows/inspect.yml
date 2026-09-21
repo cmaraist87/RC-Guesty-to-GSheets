@@ -23,6 +23,7 @@ on:
           - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
           - board             # READ what is already on the Connecteam boards
           - schedulers        # LIST every Connecteam board on the account
+          - job_match         # can each property be matched to a Connecteam Job?
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
@@ -145,6 +146,10 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            job_match)
+              MONTH=""
+              if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
+              python -u job_match.py --city "${{ inputs.city }}" $MONTH ;;
             why_missing) python -u find_reservation.py --code "${{ inputs.code }}" ;;
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
