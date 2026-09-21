@@ -52,6 +52,7 @@ on:
         type: choice
         options:
           - preview
+          - preview-test-board
           - WRITE-TO-TEST-BOARD
       city:
         description: "connecteam ONLY: which market to preview"
@@ -150,6 +151,12 @@ jobs:
               if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
                 echo "::warning::Writing to the TEST board (Chris Test)."
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test --live
+              elif [ "${{ inputs.connecteam_write }}" = "preview-test-board" ]; then
+                # Preview against Chris Test rather than the market board. The
+                # two resolve DIFFERENT Jobs -- Austin owns 35, Chris Test 3 --
+                # so previewing the market board says nothing about what would
+                # land on the test one.
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test
               else
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
