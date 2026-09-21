@@ -56,6 +56,25 @@ def wanted_properties(rows, city: str) -> list[str]:
     return sorted(out)
 
 
+def same_value(before, after) -> bool:
+    """Is `after` the same as `before`, allowing for the API filling in defaults?
+
+    A PUT comes back normalised: gps {"address": ""} is returned as
+    {"address": "", "longitude": 0.0, "latitude": 0.0}. Nothing was lost -- the
+    API wrote the zeroes it would have applied anyway -- so a key that appears
+    with an empty or zero value is not a change. A key that DISAPPEARS, or whose
+    value actually moves, still is.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        if any(k not in after for k in before):
+            return False
+        if any(not same_value(v, after[k]) for k, v in before.items()):
+            return False
+        return all(not after[k] for k in after if k not in before)
+    return before == after
+
+
+
 def put_instance_ids(client, job: dict, ids: list[int]) -> dict:
     """Write the job back with a new board list and nothing else changed."""
     body = {k: v for k, v in job.items() if k not in READ_ONLY}
@@ -135,7 +154,7 @@ def main(argv=None) -> int:
             continue
         after_ids = [int(i) for i in (got.get("instanceIds") or [])]
         moved = {k: (v, got.get(k)) for k, v in before.items()
-                 if k in got and got.get(k) != v}
+                 if k in got and not same_value(v, got.get(k))}
         ok = (tid in after_ids) != bool(args.revert)
         print(f"   {'ok ' if ok and not moved else '!! '}{p:<30} "
               f"instanceIds -> {after_ids}")
