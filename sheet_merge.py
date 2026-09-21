@@ -511,6 +511,45 @@ def merge_reservations_into_sheet(
     allowed = frozenset(norm_city(c) for c in (allowed_cities or ()))
     has_city = "City" in sheet.columns
     pair_counts = pair_bookings(sheet) if vanished_codes is not None else {}
+    # Which sheet rows are SURPLUS at their slot -- more rows sitting on a
+    # (Property, Date) than that slot has live bookings.
+    #
+    # The gate here used to ask "is any live booking at this slot?", which is a
+    # different question. When a booking is cancelled and another takes the dates,
+    # the replacement occupies the slot, the cancelled row is never considered, and
+    # it keeps looking live forever. On 2026-09-20 nine slots were in that state --
+    # 1123 Marais 10-01 among them, where Erin Gosseen cancelled on 09-02 and Enoch
+    # Gaines took the dates. Guesty confirmed all nine as a cancellation plus a
+    # replacement, none of them a double booking.
+    #
+    # Counting is what separates that from a row a candidate simply REUSES. One row
+    # and one booking at a slot is a match, whatever the codes say: the row becomes
+    # that booking's row and must not be struck. Taylor Eshmont moving onto Alyssa
+    # Reece's slot is exactly this, and so is a row whose stored code is stale. Only
+    # rows past the live count are orphans.
+    #
+    # Rows whose own code is one of the slot's live bookings are kept first, so the
+    # leftover is the booking that really is gone rather than an arbitrary one.
+    surplus_pos: set[int] = set()
+    if cancel_window and len(sheet):
+        cand_at: dict[tuple[str, str], list[str]] = {}
+        for _j, c in candidates.iterrows():
+            k = (_canonical_key(str(c["Property"]).strip()), _date_key(c["Date"]))
+            cand_at.setdefault(k, []).append(
+                str(c.get("Confirmation Code", "")).strip().upper())
+        rows_at: dict[tuple[str, str], list[int]] = {}
+        for i, r in sheet.iterrows():
+            if i in struck_rows:
+                continue          # already struck; it is not competing for the slot
+            k = (_canonical_key(str(r["Property"]).strip()), _date_key(r["Date"]))
+            rows_at.setdefault(k, []).append(i)
+        for k, idxs in rows_at.items():
+            codes = set(cand_at.get(k, ()))
+            n_live = len(cand_at.get(k, ()))
+            ordered = sorted(idxs, key=lambda i: (
+                str(sheet.at[i, "Confirmation Code"]).strip().upper() not in codes, i))
+            surplus_pos.update(ordered[n_live:])
+
     if cancel_window and len(sheet):
         lo, hi = cancel_window
         in_window = 0
@@ -552,7 +591,7 @@ def merge_reservations_into_sheet(
                 out_of_scope_city[i] = row_city
                 continue
             in_window += 1
-            if (prop, d) not in live_keys and (_canonical_key(prop), d) not in live_canon:
+            if i in surplus_pos:
                 cancelled_pos.add(i)
                 # A MOVE, not a cancellation -- the booking is still live, at a slot
                 # THIS BOOKING did not previously occupy.
