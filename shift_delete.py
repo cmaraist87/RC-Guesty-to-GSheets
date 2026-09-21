@@ -64,6 +64,21 @@ def delete_one(client, board: str, shift_id: str) -> tuple[bool, str]:
     return False, " | ".join(tried)
 
 
+def deletable(shifts, title_contains: str = "") -> tuple[list, list]:
+    """(safe to delete, refused because somebody is on them).
+
+    A card with anyone in assignedUserIds is somebody's shift. It is refused
+    whatever the window and whatever the title filter say, because a filter is
+    an argument and this is a rule. Three of the five on the test board on
+    2026-09-21 were old cards an admin had assigned while testing.
+    """
+    want = [s for s in shifts
+            if not title_contains
+            or title_contains.lower() in str(s.get("title", "")).lower()]
+    assigned = [s for s in want if s.get("assignedUserIds")]
+    return [s for s in want if not s.get("assignedUserIds")], assigned
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--board", required=True)
@@ -78,20 +93,16 @@ def main(argv=None) -> int:
     shifts = client.existing_shifts(args.board, stamp(args.frm), stamp(args.to))
     print(f"board {args.board}: {len(shifts)} card(s) in {args.frm}..{args.to}")
 
-    want = [s for s in shifts
-            if not args.title_contains
-            or args.title_contains.lower() in str(s.get("title", "")).lower()]
+    want, assigned = deletable(shifts, args.title_contains)
     if args.title_contains:
-        print(f"   {len(want)} match title containing {args.title_contains!r}")
-
-    assigned = [s for s in want if s.get("assignedUserIds")]
+        print(f"   {len(want) + len(assigned)} match title containing "
+              f"{args.title_contains!r}")
     if assigned:
         print(f"   REFUSING {len(assigned)} card(s) assigned to somebody:")
         for s in assigned[:10]:
             when = datetime.fromtimestamp(int(s.get("startTime", 0)), TZ)
             print(f"      {when:%a %d %b %Y %H:%M}  {s.get('title','')!r} "
                   f"-> users {s.get('assignedUserIds')}")
-        want = [s for s in want if not s.get("assignedUserIds")]
 
     print(f"   {len(want)} card(s) would be deleted:")
     for s in sorted(want, key=lambda x: int(x.get("startTime", 0))):
