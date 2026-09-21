@@ -25,6 +25,7 @@ on:
           - schedulers        # LIST every Connecteam board on the account
           - job_match         # can each property be matched to a Connecteam Job?
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
+          - board_peek       # every card on one board, by id (read-only)
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
@@ -147,6 +148,9 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            board_peek)
+              # `property` carries the board id; from/to bound the window.
+              python -u board_peek.py --board "${{ inputs.property }}" --from "${{ inputs.from }}" --to "${{ inputs.to }}" ;;
             job_match)
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
