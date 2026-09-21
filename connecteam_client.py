@@ -45,12 +45,21 @@ class ConnecteamError(RuntimeError):
 def _shift_key(shift: dict) -> tuple:
     """What makes two shifts "the same job" for the purpose of not duplicating it.
 
-    Title and start instant. The title carries the property and its codes, so two
-    cleans of different properties at the same minute stay distinct, while the same
-    clean posted twice collapses. End time is deliberately excluded: a turnover's
+    The PROPERTY and the start instant -- and since 2026-09-21 the property is the
+    jobId, not the title. It used to be the title, and the key was (title, start)
+    on the strength of that. The moment the property moved into the Job field
+    every card became "Clean" or "Turnover", and seven different Austin cleans at
+    11:00 on 18 October collapsed into one key: the first run would create all
+    seven, and every run after would see one of them and skip the other six as
+    already present. A card deleted by hand would then never come back.
+
+    The title stays in the key so a Clean and a Turnover of the same property at
+    the same minute remain distinct. End time is deliberately excluded: a card's
     window can be re-derived slightly differently without it becoming a new job.
     """
-    return (str(shift.get("title", "")).strip(), int(shift.get("startTime", 0) or 0))
+    return (str(shift.get("jobId") or "").strip(),
+            str(shift.get("title", "")).strip(),
+            int(shift.get("startTime", 0) or 0))
 
 
 def check_api_key(api_key) -> str:
@@ -216,7 +225,8 @@ class ConnecteamClient:
 
     # --- writing ----------------------------------------------------------
     def create_shifts(self, scheduler_id: str, shifts: list[dict],
-                      live: bool = False, skip_existing: bool = True) -> list[dict]:
+                      live: bool = False, skip_existing: bool = True,
+                      job_names=None) -> list[dict]:
         """Create shifts on one board. Returns what was created (empty when not live).
 
         `live=False` -- the default, and the whole point -- prints what would be sent
@@ -253,7 +263,7 @@ class ConnecteamClient:
             # Every one of them. This list exists to be checked before anything
             # becomes real, and a truncated list cannot be checked.
             for s in wanted:
-                print(f"     {_fmt(s)}")
+                print(f"     {_fmt(s, job_names)}")
             return []
 
         created: list[dict] = []
@@ -269,12 +279,20 @@ class ConnecteamClient:
         return created
 
 
-def _fmt(shift: dict) -> str:
+def _fmt(shift: dict, job_names=None) -> str:
+    """One line per card, for a list somebody has to read before it becomes real.
+
+    `job_names` maps jobId -> the Job's name. Without it the line can only show
+    the title, and since the property moved into the Job field every title reads
+    "Clean" -- a preview of thirty-eight identical lines proves nothing.
+    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(shift.get("timezone", "America/Chicago"))
     start = datetime.fromtimestamp(int(shift["startTime"]), tz)
     end = datetime.fromtimestamp(int(shift["endTime"]), tz)
+    jid = str(shift.get("jobId") or "")
+    where = (job_names or {}).get(jid) or (jid[:8] if jid else "(no Job)")
     return (f"{start:%a %d %b %H:%M}-{end:%H:%M} {shift.get('timezone','')}  "
-            f"{shift.get('title','')}  [Unassigned]")
+            f"{where:<32} {shift.get('title','')}  [Unassigned]")

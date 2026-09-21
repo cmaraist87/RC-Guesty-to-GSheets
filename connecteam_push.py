@@ -148,7 +148,12 @@ def main(argv=None) -> int:
     print(f"\nBoard {board} ({args.city}) -- "
           + ("CREATING" if args.live else "PREVIEW, nothing will be sent") + ":\n")
     try:
-        created = client.create_shifts(board, payloads, live=args.live)
+        created = client.create_shifts(
+            board, payloads, live=args.live,
+            # So the preview names the property, not thirty-eight "Clean"s.
+            job_names={str(j.get("jobId") or j.get("id")):
+                       (j.get("name") or j.get("title") or "")
+                       for j in all_jobs})
     except ConnecteamError as e:
         print(f"\n!! {e}", file=sys.stderr)
         return 1

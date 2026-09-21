@@ -146,6 +146,35 @@ def test_shift_identity_is_title_plus_start():
     print("OK: two cleans are the same job when property and start match")
 
 
+def test_same_title_different_property_is_not_the_same_job():
+    """The 2026-09-21 trap. Once the property moved into the Job field every card
+    became "Clean", so seven different Austin cleans at 11:00 on 18 October all
+    keyed alike: the first run would create all seven and every run after would
+    see one and skip the other six as already present -- and a card deleted by
+    hand would never come back. The jobId is what tells them apart now."""
+    one = dict(shift("Clean", 100, 900), jobId="job-webberville")
+    two = dict(shift("Clean", 100, 900), jobId="job-porter")
+    assert _shift_key(one) != _shift_key(two), _shift_key(one)
+
+    # Same property, same minute, still one job however often it is posted.
+    assert _shift_key(one) == _shift_key(dict(shift("Clean", 100, 111),
+                                              jobId="job-webberville"))
+    # A Clean and a Turnover of the same property at the same minute are two.
+    assert _shift_key(one) != _shift_key(dict(shift("Turnover", 100, 900),
+                                              jobId="job-webberville"))
+    print("OK: cards sharing a title are told apart by the Job they point at")
+
+
+def test_the_skip_guard_keeps_every_property_on_a_shared_minute():
+    """End to end through create_shifts, because the key is only half of it."""
+    api = FakeAPI()
+    client = ConnecteamClient("k", session=api)
+    day = [dict(shift("Clean", 100, 1000), jobId=f"job-{i}") for i in range(7)]
+    made = client.create_shifts("2520975", day, live=True)
+    assert len(made) == 7, ("all seven properties must be created", len(made))
+    print("OK: seven properties cleaned at the same minute produce seven cards")
+
+
 if __name__ == "__main__":
     test_a_key_that_cannot_be_a_key_is_refused_before_any_request()
     test_nothing_is_sent_unless_live_is_asked_for()
@@ -155,4 +184,6 @@ if __name__ == "__main__":
     test_an_assigned_shift_never_reaches_the_network()
     test_more_than_500_is_split()
     test_shift_identity_is_title_plus_start()
+    test_same_title_different_property_is_not_the_same_job()
+    test_the_skip_guard_keeps_every_property_on_a_shared_minute()
     print("\nALL CONNECTEAM-CLIENT TESTS PASSED")
