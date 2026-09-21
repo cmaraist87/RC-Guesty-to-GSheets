@@ -69,20 +69,31 @@ def main(argv=None) -> int:
         print("\n--create not given; nothing was created.")
         return 0
 
-    # Can a Job be created at all, and can it be aimed at a board?
-    for label, path, body in (
-        ("with schedulerId", "/jobs/v1/jobs",
-         {"name": "ZZ TEST Ramos Sync", "schedulerId": TEST_SCHEDULER}),
-        ("plain", "/jobs/v1/jobs", {"name": "ZZ TEST Ramos Sync"}),
-    ):
-        print(f"\n--- create {label}")
+    # Can a Job be created, and aimed at a board?
+    #
+    # The endpoint takes an ARRAY -- "Input should be a valid list" -- the same
+    # shape as the shifts endpoint. The Job object calls its name `title`, not
+    # `name`, and names its boards in `instanceIds`; both were guessed wrong the
+    # first time and never sent at all the second.
+    name = "ZZ Ramos Sync Test"
+    tid = int(TEST_SCHEDULER)
+    shapes = [
+        ("title + instanceIds", [{"title": name, "instanceIds": [tid]}]),
+        ("name + instanceIds", [{"name": name, "instanceIds": [tid]}]),
+        ("title only", [{"title": name}]),
+    ]
+    for label, body in shapes:
+        print("")
+        print(f"--- create: {label}")
+        print(f"    body: {json.dumps(body)}")
         try:
-            got = client._request("POST", path, body=body, tries=1)
+            got = client._request("POST", "/jobs/v1/jobs", body=body, tries=1)
             print(f"    ACCEPTED: {json.dumps(got)[:400]}")
             return 0
         except ConnecteamError as e:
-            print(f"    REJECTED: {str(e)[:300]}")
-    print("\nNo Job could be created through the API.")
+            print(f"    REJECTED: {str(e)[:260]}")
+    print("")
+    print("No Job could be created through the API.")
     return 1
 
 
