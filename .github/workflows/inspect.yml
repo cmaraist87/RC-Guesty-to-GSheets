@@ -26,6 +26,7 @@ on:
           - job_match         # can each property be matched to a Connecteam Job?
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
           - board_peek       # every card on one board, by id (read-only)
+          - shift_fields     # our card beside the team's, field by field
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
@@ -167,6 +168,10 @@ jobs:
             board_peek)
               # `property` carries the board id; from/to bound the window.
               python -u board_peek.py --board "${{ inputs.property }}" --from "${{ inputs.from }}" --to "${{ inputs.to }}" ;;
+            shift_fields)
+              # `property` is the board id; from/to bound OUR cards.
+              # The team's own cards are read from the month before.
+              python -u shift_fields.py --board "${{ inputs.property }}" --mine "${{ inputs.from }}" "${{ inputs.to }}" --theirs 2026-09-01 2026-10-01 ;;
             job_match)
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
