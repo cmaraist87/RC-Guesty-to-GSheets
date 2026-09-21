@@ -47,6 +47,24 @@ def main(argv=None) -> int:
     print(f"   (test board is {TEST_SCHEDULER}; markets are "
           f"{sorted(set(CITY_SCHEDULERS.values()))})")
 
+    # How many Jobs each board actually owns, once the deleted ones are dropped.
+    print("")
+    print("Counting every Job on the account, by board...")
+    allj, how = client.list_jobs(TEST_SCHEDULER)
+    print(f"   {len(allj)} Job(s) via {how}")
+    live = [j for j in allj if not j.get("isDeleted")]
+    print(f"   {len(allj) - len(live)} are soft-DELETED and unusable")
+    per = {}
+    for j in live:
+        for iid in (j.get("instanceIds") or []):
+            per.setdefault(str(iid), []).append(j)
+    names = {**{v: k for k, v in CITY_SCHEDULERS.items()},
+             TEST_SCHEDULER: "CHRIS TEST"}
+    for bid, js in sorted(per.items(), key=lambda kv: -len(kv[1])):
+        print(f"   board {bid:<10} {len(js):>5} Job(s)   {names.get(bid, '')}")
+    print(f"   Jobs usable on the TEST board {TEST_SCHEDULER}: "
+          f"{len(per.get(TEST_SCHEDULER, []))}")
+
     if not args.create:
         print("\n--create not given; nothing was created.")
         return 0
