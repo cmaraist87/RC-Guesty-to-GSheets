@@ -70,7 +70,16 @@ CITY_SCHEDULERS = {
 # before it writes anything -- a stale id should say so, not 404 halfway through.
 TEST_SCHEDULER = "19713722"
 
-DEFAULT_CLEAN_HOURS = 4.0      # every job is this long, from the checkout time
+# How long the CARD is -- not how long the clean takes.
+#
+# Connecteam will not accept a shift without an endTime, and will not accept one
+# where the end equals the start; both were tried against the API on 2026-09-21
+# and refused. A short block is the nearest thing to no block: the card says be
+# there at 11:00 and stops short of claiming how long the property should take,
+# which is the point, since square footage varies and a fixed window implied
+# otherwise. 15 minutes was verified as accepted.
+CARD_MINUTES = 15
+DEFAULT_CLEAN_HOURS = CARD_MINUTES / 60.0     # kept: callers pass hours
 
 # Turnovers are the tight ones: someone arrives the same day, so the window is fixed
 # and short. Colour is the only thing that reads at a glance on a packed board.
@@ -132,6 +141,12 @@ def _parse_local(date_str: str, time_str: str, tz: str) -> datetime | None:
 # kept, not deleted -- turning this back on is the whole change when they want them.
 INCLUDE_CODES_IN_TITLE = False
 
+# What the title says now that the property lives in the Job field. Connecteam
+# requires a non-empty title, so it carries the KIND of job instead of the place.
+STANDARD_TITLE = "Clean"
+TURNOVER_TITLE = "Turnover"
+
+
 
 def shift_title(row, with_codes: bool | None = None) -> str:
     """The job name on the card. The property is what a cleaner navigates by.
@@ -140,9 +155,13 @@ def shift_title(row, with_codes: bool | None = None) -> str:
     asked to hold today. With them on, the codes follow the property, because a
     turnover or an early check-out changes when the cleaner has to be there.
     """
+    # The property is NOT in the title any more -- it is the Job the card points
+    # at. But Connecteam requires a title and refuses an empty one (tried both
+    # ways on 2026-09-21), so the title says what KIND of job it is instead.
     prop = str(row.get("Property", "")).strip()
+    is_to = str(row.get("T/O", "")).strip().lower() == "yes"
     if not (INCLUDE_CODES_IN_TITLE if with_codes is None else with_codes):
-        return prop
+        return TURNOVER_TITLE if is_to else STANDARD_TITLE
     codes = []
     if str(row.get("T/O", "")).strip().lower() == "yes":
         codes.append("T/O")
@@ -152,7 +171,8 @@ def shift_title(row, with_codes: bool | None = None) -> str:
     return f"{prop} — {' · '.join(codes)}" if codes else prop
 
 
-def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
+def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS,
+                  job_index=None) -> dict | None:
     """One sheet row -> one Connecteam shift payload, or None if it is not a job.
 
     Returns the payload only; the scheduler it belongs to is the caller's business,
@@ -167,7 +187,8 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
     if start is None:
         return None                      # unparseable date/time: skip, never guess
 
-    # The job starts when the guest leaves, and runs a FIXED window from there.
+    # The job starts when the guest leaves, and the card runs a short nominal
+    # block from there -- see CARD_MINUTES.
     #
     # It used to end at the next guest's check-in, which made a turnover's card
     # as long as the gap happened to be -- 11:00-16:00 one day, 11:00-15:00 the
@@ -176,7 +197,16 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
     end = start + timedelta(hours=clean_hours)
 
     is_turnover = str(row.get("T/O", "")).strip().lower() == "yes"
-    return {
+    # The property, as the Job the card points at. Without an index this stays
+    # absent and the card is the old shape -- a caller that has not loaded the
+    # board's Jobs must not silently produce cards with no property on them.
+    job_id = None
+    if job_index is not None:
+        from connecteam_jobs import resolve
+        job_id, _name, _why = resolve(row.get("Property", ""), job_index)
+        if not job_id:
+            return None            # no Job -> no card; the caller reports it
+    payload = {
         "startTime": int(start.timestamp()),   # epoch SECONDS; ms is rejected
         "endTime": int(end.timestamp()),
         "timezone": tz,
@@ -189,23 +219,28 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS) -> dict | None:
         "assignedUserIds": [],
         "openSpots": 1,                    # one cleaner per job
         "isPublished": True,
-
     }
+    if job_id:
+        payload["jobId"] = job_id
+    return payload
 
 
-def shifts_for_rows(rows, clean_hours: float = DEFAULT_CLEAN_HOURS):
+def shifts_for_rows(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
+                    job_index=None):
     """[(row, payload)] for every row that is a job. Pairs so the caller can write
     the resulting shift id back to the row it came from."""
     out = []
     for _, row in rows.iterrows():
-        payload = shift_for_row(row, clean_hours=clean_hours)
+        payload = shift_for_row(row, clean_hours=clean_hours,
+                                job_index=job_index)
         if payload is not None:
             out.append((row, payload))
     return out
 
 
 def shifts_by_scheduler(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
-                        only_city: str | None = None) -> dict[str, list]:
+                        only_city: str | None = None,
+                        job_index=None) -> dict[str, list]:
     """{scheduler id -> [(row, payload)]}, ready to post one board at a time.
 
     Grouped by board rather than returned flat because that is how the rollout has
@@ -218,7 +253,8 @@ def shifts_by_scheduler(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
     """
     wanted = norm_city(only_city) if only_city else None
     out: dict[str, list] = {}
-    for row, payload in shifts_for_rows(rows, clean_hours=clean_hours):
+    for row, payload in shifts_for_rows(rows, clean_hours=clean_hours,
+                                        job_index=job_index):
         city = row.get("City", "")
         if wanted is not None and norm_city(city) != wanted:
             continue

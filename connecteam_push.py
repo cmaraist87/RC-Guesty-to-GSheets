@@ -20,6 +20,7 @@ import os
 import sys
 
 from connecteam_client import ConnecteamClient, ConnecteamError
+from connecteam_jobs import build_index, resolve
 from connecteam_map import (CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
                             shifts_by_scheduler)
 from sheet_merge import norm_city
@@ -71,18 +72,62 @@ def main(argv=None) -> int:
     # The sheet holds every market; take only the one being switched on. Thunderbolt
     # and Savannah share a board but are separate markets, so this is by CITY, not
     # by board -- one can be proved before the other goes anywhere near it.
-    groups = shifts_by_scheduler(rows, only_city=args.city)
+    # The board's Jobs, so the card can point the property at one. Loaded BEFORE
+    # the shifts are built, because a property with no Job produces no card at
+    # all -- the property is no longer in the title, so a card without a Job
+    # would name no place whatsoever.
+    client = ConnecteamClient(key)
+    board_for_jobs = TEST_SCHEDULER if args.test else board
+    all_jobs, how = client.list_jobs(board_for_jobs)
+    job_index = build_index(all_jobs)
+    print(f"{len(all_jobs)} Job(s) readable [{how}]; "
+          f"{len(job_index)} distinct name(s).")
+
+    groups = shifts_by_scheduler(rows, only_city=args.city, job_index=job_index)
     jobs = groups.get(board, [])
     in_city = int((rows.get("City", "").map(norm_city) == norm_city(args.city)).sum()) \
         if "City" in rows.columns else 0
     print(f"{in_city} row(s) are {args.city}; {len(jobs)} of them are cleans "
-          f"(a row with no check-out is not a job).")
+          f"with a Job to point at (a row with no check-out is not a job).")
+
+    # Every property that produced no card, and why. These are the ones the team
+    # has to create in Connecteam before their cleans can reach anybody.
+    unmatched = sorted({str(r.get("Property", "")).strip()
+                        for _i, r in rows.iterrows()
+                        if norm_city(r.get("City", "")) == norm_city(args.city)
+                        and str(r.get("Check out - Time", "")
+                                or r.get("Check-out Time", "")).strip()
+                        and resolve(r.get("Property", ""), job_index)[0] is None})
+    if unmatched:
+        print("")
+        print(f"  {len(unmatched)} propertie(s) have NO Job on this board, so "
+              f"their cleans are not being sent:")
+        for prop in unmatched:
+            print(f"     {prop}")
+        print("  Create these as Jobs in Connecteam and they are picked up "
+              "on the next run.")
+
+    # What each card will actually point at, so the choice can be read before it
+    # is made. Where several Jobs matched, the reason says what was passed over.
+    shown = {}
+    for row, payload in jobs:
+        prop = str(row.get("Property", "")).strip()
+        if prop not in shown:
+            _jid, name, why = resolve(prop, job_index)
+            shown[prop] = (name, why)
+    if shown:
+        print("")
+        print(f"  {len(shown)} propertie(s) -> Job:")
+        for prop, (name, why) in sorted(shown.items()):
+            mark = "  " if why == "one Job matches" else " *"
+            print(f"   {mark} {prop:<30} -> {name}")
+            if mark == " *":
+                print(f"        {why}")
     if not jobs:
         print("Nothing to do.")
         return 0
 
     payloads = [p for _, p in jobs]
-    client = ConnecteamClient(key)
     if args.test:
         # Verify before redirecting. The test board's id has already changed twice --
         # once because a group id was mistaken for it, once because the board was

@@ -51,9 +51,10 @@ def test_every_job_is_a_fixed_window_from_the_checkout():
     """The job starts when the guest leaves and runs a fixed four hours.
 
     It used to end at the next guest's arrival, which made the same work 5h one day
-    and 4h the next depending on who was booked in. The card is the cleaning job,
-    not the vacancy around it, so its length must not move with someone else's
-    arrival time. Chris settled this on 2026-09-12.
+    and 4h the next depending on who was booked in. The card's length must not
+    move with someone else's arrival time. Chris settled this on 2026-09-12; on
+    2026-09-21 the fixed window shrank to a short marker (see CARD_MINUTES),
+    which is why this asserts against the constant and not a number.
     """
     window = dt.timedelta(hours=DEFAULT_CLEAN_HOURS)
 
@@ -94,17 +95,48 @@ def test_cities_resolve_to_their_own_timezone():
     print("OK: each city's shift is stamped in its own timezone")
 
 
-def test_the_job_field_holds_the_property_name_and_nothing_else():
-    """What the client asked for today: the job field carries the property, full
-    stop. Not the codes -- those come back later, hence a flag rather than a
-    deletion."""
-    for row in (_row(),
-                _row(**{"T/O": "yes"}),
-                _row(**{"Adjustments": "ECO"}),
+def test_the_title_says_the_kind_of_job_not_the_place():
+    """The property moved into the Job field on 2026-09-21, so the title no
+    longer carries it. It cannot simply be dropped: Connecteam refuses a shift
+    with an empty title and one with no title key at all, both tried against the
+    API that day. So it says what kind of job this is."""
+    for row in (_row(), _row(**{"Adjustments": "ECO"})):
+        assert shift_title(row) == "Clean", shift_title(row)
+        assert shift_for_row(row)["title"] == "Clean"
+    for row in (_row(**{"T/O": "yes"}),
                 _row(**{"T/O": "yes", "Adjustments": "ECO, LCI"})):
-        assert shift_title(row) == "1022 Mandeville", shift_title(row)
-        assert shift_for_row(row)["title"] == "1022 Mandeville"
-    print("OK: the job field is the property name, with no codes appended")
+        assert shift_title(row) == "Turnover", shift_title(row)
+    print("OK: the title is the kind of job; the property is the Job it points at")
+
+
+def test_the_card_is_a_short_block_not_a_working_window():
+    """Connecteam will not take a shift with no endTime, nor one whose end equals
+    its start -- both refused on 2026-09-21. A big property and a small one must
+    still not be made to look the same length, so the card is deliberately short:
+    it says be there at 11:00 and claims nothing about how long the work takes."""
+    s = shift_for_row(_row())
+    assert (_utc(s["endTime"]) - _utc(s["startTime"])) == dt.timedelta(minutes=15)
+    assert s["endTime"] > s["startTime"], "the API refuses a zero-length shift"
+    print("OK: the card is a 15-minute marker, not a claim about the work")
+
+
+def test_no_job_index_means_no_jobId_rather_than_a_card_without_a_property():
+    """A caller that has not loaded the board's Jobs gets the old shape. A card
+    with neither the property in its title nor a Job to point at would name no
+    place at all, which is worse than not sending it."""
+    assert "jobId" not in shift_for_row(_row())
+    index = {"1022 mandeville": [("job-1", "1022 Mandeville")]}
+    assert shift_for_row(_row(), job_index=index)["jobId"] == "job-1"
+    print("OK: jobId appears only when the board's Jobs have been loaded")
+
+
+def test_a_property_with_no_job_produces_no_card():
+    """Never invent a Job. The property is reported instead -- the team creates
+    it in Connecteam, which is what was agreed for the three Austin properties
+    that had none."""
+    index = {"somewhere else": [("job-9", "Somewhere Else")]}
+    assert shift_for_row(_row(), job_index=index) is None
+    print("OK: an unmatched property yields no card, never a guessed Job")
 
 
 def test_the_codes_can_be_switched_back_on_without_rewriting_anything():
@@ -324,7 +356,10 @@ if __name__ == "__main__":
     test_every_colour_we_send_is_one_the_api_accepts()
     test_the_test_board_is_not_a_live_one()
     test_cities_resolve_to_their_own_timezone()
-    test_the_job_field_holds_the_property_name_and_nothing_else()
+    test_the_title_says_the_kind_of_job_not_the_place()
+    test_the_card_is_a_short_block_not_a_working_window()
+    test_no_job_index_means_no_jobId_rather_than_a_card_without_a_property()
+    test_a_property_with_no_job_produces_no_card()
     test_the_codes_can_be_switched_back_on_without_rewriting_anything()
     test_unparseable_rows_are_skipped_not_guessed()
     test_backwards_times_do_not_make_a_negative_shift()
