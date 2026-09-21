@@ -27,6 +27,7 @@ on:
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
           - board_peek       # every card on one board, by id (read-only)
           - shift_fields     # our card beside the team's, field by field
+          - shift_delete     # DELETES cards from one board (needs write)
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
@@ -165,6 +166,14 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            shift_delete)
+              # `property` is the board id; from/to bound the window;
+              # `code` optionally narrows to titles containing it.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              TITLE=""
+              if [ -n "${{ inputs.code }}" ]; then TITLE="--title-contains ${{ inputs.code }}"; fi
+              python -u shift_delete.py --board "${{ inputs.property }}" --from "${{ inputs.from }}" --to "${{ inputs.to }}" $TITLE $CONFIRM ;;
             board_peek)
               # `property` carries the board id; from/to bound the window.
               python -u board_peek.py --board "${{ inputs.property }}" --from "${{ inputs.from }}" --to "${{ inputs.to }}" ;;
