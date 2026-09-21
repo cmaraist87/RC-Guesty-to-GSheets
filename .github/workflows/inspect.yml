@@ -43,13 +43,18 @@ on:
         default: false
         type: boolean
       connecteam_write:
-        description: "connecteam ONLY: preview, or actually write TO THE TEST BOARD"
+        description: "connecteam: preview | write to TEST board | write to the REAL board"
         required: false
         default: preview
         type: choice
         options:
           - preview
           - WRITE-TO-TEST-BOARD
+          # Authorised by Chris on 2026-09-21, for Austin, after the test board
+          # was shown to be incapable of validating the new card: a Job belongs
+          # to a board and the test board owns none. Spelled out in full so it
+          # cannot be picked by accident, and still one city at a time.
+          - WRITE-TO-MARKET-BOARD-LIVE
       city:
         description: "connecteam ONLY: which market to preview"
         required: false
@@ -135,15 +140,26 @@ jobs:
             connecteam)
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
-              # --live is ONLY ever paired with --test here, and the pairing is in one
-              # branch so the two cannot come apart. There is no combination of inputs
-              # to this workflow that writes to a market board; that stays a deliberate
-              # act at a terminal, because a card on a crew's phone cannot be taken
-              # back the way a sheet cell can.
+              # A card on a crew's phone cannot be taken back the way a sheet cell
+              # can, so writing is never the default and never implicit: preview
+              # unless asked otherwise, one city at a time, everything unassigned.
+              #
+              # Until 2026-09-21 no input here could reach a market board at all.
+              # That changed because the test board turned out to be incapable of
+              # validating the new card -- a Job belongs to a board and the test
+              # board owns none -- so the only genuine test is a real one. Chris
+              # authorised it for Austin that day. The option is spelled out in
+              # full rather than being a boolean, so it cannot be picked by
+              # accident, and the city still has to be named.
               if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
-                echo "::warning::Writing to the TEST board (no market board can be"
-                echo "::warning::reached from this workflow)."
+                echo "::warning::Writing to the TEST board."
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test --live
+              elif [ "${{ inputs.connecteam_write }}" = "WRITE-TO-MARKET-BOARD-LIVE" ]; then
+                # A REAL crew board. There is no delete path in this repo, so a
+                # card written here is removed by hand or not at all.
+                echo "::warning::Writing to ${{ inputs.city }}'"'"'s REAL board."
+                echo "::warning::Cards will appear on a crew board. Unassigned, but real."
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --live
               else
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
