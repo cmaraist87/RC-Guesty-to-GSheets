@@ -24,6 +24,7 @@ on:
           - board             # READ what is already on the Connecteam boards
           - schedulers        # LIST every Connecteam board on the account
           - job_match         # can each property be matched to a Connecteam Job?
+          - shift_shape      # WRITES probe shifts to the TEST board to learn the API
           - why_missing       # why is one reservation not on the sheet?
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
@@ -150,6 +151,12 @@ jobs:
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
               python -u job_match.py --city "${{ inputs.city }}" $MONTH ;;
+            shift_shape)
+              # Test board only -- the script verifies the id against the
+              # account and has no path to a market board.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              python -u shift_shape_probe.py $CONFIRM ;;
             why_missing) python -u find_reservation.py --code "${{ inputs.code }}" ;;
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
