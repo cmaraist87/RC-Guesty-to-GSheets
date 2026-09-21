@@ -63,12 +63,20 @@ def shapes(job_id: str):
         ("job_no_title_key",
          "same, but omitting `title` rather than sending it empty",
          dict(base, jobId=job_id, startTime=at(6), endTime=at(6) + 3600)),
-        ("job_no_end",
-         "THE ONE THAT MATTERS: jobId, no title, and no endTime",
-         dict(base, jobId=job_id, startTime=at(8))),
-        ("title_no_end",
-         "no endTime with a title, to separate the two variables",
-         dict(base, title="PROBE no end", startTime=at(10))),
+        ("no_end",
+         "no endTime at all -- ANSWERED 2026-09-21: rejected, Field required",
+         dict(base, title="PROBE no end", startTime=at(8))),
+        # endTime cannot be dropped, so the question becomes how SHORT it may be.
+        # A card that reads as a start time rather than a window is the nearest
+        # thing to what was asked for: the crew sees when to be there, and the
+        # block does not imply how long a property should take.
+        ("zero_length",
+         "endTime EQUAL to startTime -- a card with no duration at all",
+         dict(base, title="PROBE zero", startTime=at(10), endTime=at(10))),
+        ("fifteen_min",
+         "a 15-minute block -- short enough to read as a start time",
+         dict(base, title="PROBE 15min", startTime=at(12),
+              endTime=at(12) + 900)),
     ]
 
 
@@ -88,17 +96,33 @@ def main(argv=None) -> int:
     name = boards[TEST_SCHEDULER].get("name", "?")
     print(f"TEST BOARD {TEST_SCHEDULER} ({name})")
 
-    jobs, how = client.list_jobs(TEST_SCHEDULER)
-    if not jobs:
-        print(f"ERROR: no Jobs readable ({how}); cannot test jobId.", file=sys.stderr)
-        return 2
-    job = jobs[0]
-    job_id = str(job.get("jobId") or job.get("id"))
-    job_name = job.get("name") or job.get("title") or "?"
-    print(f"using Job {job_id}  ({job_name})")
+    # Which Jobs does THIS board accept? /jobs/v1/jobs answers for the whole
+    # account -- 1429 of them -- but the test board rejected one of those with
+    # "job_id ... does not exist", so Jobs are scoped to a board and the
+    # account-wide list is the wrong question. Try the board-scoped paths too.
+    print("Job lists, by path:")
+    job_id = ""
+    for path in (f"/scheduler/v1/schedulers/{TEST_SCHEDULER}/jobs",
+                 "/scheduler/v1/jobs",
+                 "/jobs/v1/jobs"):
+        try:
+            rows = client._rows(client._request("GET", path + "?limit=100", tries=1))
+        except ConnecteamError as e:
+            print(f"   {path:<52} -> {str(e).split('HTTP ')[-1][:3]}")
+            continue
+        print(f"   {path:<52} -> {len(rows)} job(s)")
+        for j in rows[:5]:
+            print(f"        {j.get('jobId') or j.get('id')}  "
+                  f"{j.get('name') or j.get('title') or '?'}")
+        if rows and not job_id and "schedulers" in path:
+            job_id = str(rows[0].get("jobId") or rows[0].get("id"))
+    if not job_id:
+        print("   no board-scoped Job found; jobId shapes will be skipped.")
     print()
 
     for label, why, payload in shapes(job_id):
+        if "jobId" in payload and not job_id:
+            continue                    # nothing valid to point at on this board
         print(f"--- {label}: {why}")
         print(f"    sending: {json.dumps(payload, sort_keys=True)}")
         if not args.confirm:
