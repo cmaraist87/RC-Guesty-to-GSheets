@@ -33,6 +33,7 @@ on:
           - shift_fields     # our card beside the team's, field by field
           - shift_delete     # DELETES cards from one board (needs write)
           - why_missing       # why is one reservation not on the sheet?
+          - reservation_info  # everything known about one or more reservations
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
           - marks_audit       # does reading the marks see the whole tab?
@@ -216,6 +217,9 @@ jobs:
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
               python -u shift_shape_probe.py $CONFIRM ;;
             why_missing) python -u find_reservation.py --code "${{ inputs.code }}" ;;
+            reservation_info)
+              # `code` takes a comma-separated list. Read-only.
+              python -u reservation_info.py --codes "${{ inputs.code }}" ;;
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
             strike_snapshot) python -u strike_snapshot.py ;;
