@@ -36,6 +36,7 @@ on:
           - reservation_info  # everything known about one or more reservations
           - duplicates        # rows sharing a (Property, Date)
           - property_check    # pipeline vs sheet, for one property
+          - property_rows    # every sheet row for a property (no Guesty token)
           - marks_audit       # does reading the marks see the whole tab?
           - strike_snapshot   # every struck row, diffable
           - strike_probe      # is the line on the whole row, or only part of it?
@@ -221,6 +222,7 @@ jobs:
               # `code` takes a comma-separated list. Read-only.
               python -u reservation_info.py --codes "${{ inputs.code }}" ;;
             property_check) python -u property_check.py --property "${{ inputs.property }}" ;;
+            property_rows) python -u property_rows.py --like "${{ inputs.property }}" ;;
             marks_audit) python -u marks_audit.py ;;
             strike_snapshot) python -u strike_snapshot.py ;;
             filter_audit) python -u filter_audit.py --rows "${{ inputs.property }}" ;;
