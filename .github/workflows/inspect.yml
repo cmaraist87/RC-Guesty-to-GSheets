@@ -24,6 +24,7 @@ on:
           - board             # READ what is already on the Connecteam boards
           - schedulers        # LIST every Connecteam board on the account
           - job_match         # can each property be matched to a Connecteam Job?
+          - market_ready      # size and Job coverage per market and per board
           - job_fields        # what a Job looks like; can we create one?
           - job_create        # CREATE the Jobs the TEST board is missing
           - job_share        # can a Job be added to a second board? (our Job only)
@@ -166,6 +167,10 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            market_ready)
+              MONTH=""
+              if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
+              python -u market_readiness.py $MONTH ;;
             job_share_run)
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
