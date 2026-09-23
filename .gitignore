@@ -38,3 +38,4 @@ _archive/
 Invoice *.pdf
 Invoice *.xlsx
 reservation_test.ipynb
+invoice-rci-*.html
