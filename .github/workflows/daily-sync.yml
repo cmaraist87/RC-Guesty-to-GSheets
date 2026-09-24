@@ -44,6 +44,21 @@ on:
     # scheduler is best-effort and the fifteen samples above show what that
     # means in practice. A punctual external trigger is the only way to promise
     # 6:45, and is tracked separately.
+    # The floor matters more than the ceiling. Landing time is roughly cron
+    # time plus GitHub's lag, so the EARLIEST cron sets the earliest possible
+    # landing -- and 2026-09-24, the first night of the wider band, landed at
+    # 06:02 Chicago, the latest of the thirteen good days. The band had been
+    # widened but its floor raised from 04:47 to 05:03 UTC.
+    #
+    # These run ahead of it. Delivered on time they fall before the gate's
+    # 01:00 Chicago window and stand down costing nothing; delivered late --
+    # which is the norm -- they land exactly as the window opens.
+    - cron: "3 2 * * *"
+    - cron: "33 2 * * *"
+    - cron: "3 3 * * *"
+    - cron: "33 3 * * *"
+    - cron: "3 4 * * *"
+    - cron: "33 4 * * *"
     - cron: "3 5 * * *"
     - cron: "33 5 * * *"
     - cron: "3 6 * * *"
