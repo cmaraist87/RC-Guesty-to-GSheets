@@ -66,6 +66,10 @@ on:
         description: "Dry run (fetch + merge, but do NOT write to the sheet)"
         type: boolean
         default: true
+      as_scheduled:
+        description: "Treat this as the DAILY run: check out `live`, claim the day so the crons stand down, obey SYNC_LIVE. Used by the external scheduler."
+        type: boolean
+        default: false
       repair_shifted_tabs:
         description: "One-off repair: CLEAR tabs stuck on the old shifted layout and rebuild them from Guesty"
         type: boolean
@@ -109,7 +113,7 @@ jobs:
       # before the tag moves.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'schedule' && 'live' || github.ref }}
+          ref: ${{ (github.event_name == 'schedule' || github.event.inputs.as_scheduled == 'true') && 'live' || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -122,7 +126,7 @@ jobs:
         id: guard
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.as_scheduled }}" != "true" ]; then
             echo "run=yes" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch -> proceeding."
           else
@@ -178,7 +182,7 @@ jobs:
           #    (the safety toggle). Until you set it, the daily 4 AM run stays a
           #    dry-run and never writes your sheet.
           DRY=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.as_scheduled }}" != "true" ]; then
             if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
           else
             if [ "${{ vars.SYNC_LIVE }}" != "true" ]; then
@@ -191,8 +195,14 @@ jobs:
           else
             echo "LIVE mode: the Google Sheet WILL be updated."
           fi
+          # --scheduled makes sync.py claim the day in shared state, so every
+          # other trigger that morning stands down. The external scheduler MUST
+          # land here too, or Cloud Scheduler and GitHub's crons would each run
+          # a full sync.
           SCHED=""
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then SCHED="--scheduled"; fi
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ "${{ github.event.inputs.as_scheduled }}" = "true" ]; then
+            SCHED="--scheduled"
+          fi
           # -u keeps stdout unbuffered so the log reads in the order things
           # actually happened. Today's traceback printed ABOVE the output that
           # preceded it, which makes a failure far harder to read than it is.
