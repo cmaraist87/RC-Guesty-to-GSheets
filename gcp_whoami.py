@@ -47,15 +47,23 @@ def main(argv=None) -> int:
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/devstorage.read_only"])
         s = AuthorizedSession(creds)
-        r = s.get(f"https://storage.googleapis.com/storage/v1/b/{bucket}",
-                  params={"fields": "name,projectNumber,location"}, timeout=20)
+        # LIST OBJECTS, not GET BUCKET. The key holds roles/storage.objectAdmin,
+        # which grants storage.objects.* but NOT storage.buckets.get -- so asking
+        # for bucket metadata returns 403 on a perfectly healthy setup and reads
+        # like a misconfiguration. Listing is what the sync actually does.
+        r = s.get(f"https://storage.googleapis.com/storage/v1/b/{bucket}/o",
+                  params={"prefix": "guesty/", "fields": "items(name,updated)"},
+                  timeout=20)
         if r.status_code == 200:
-            d = r.json()
-            print(f"  bucket answers   YES  (project number {d.get('projectNumber')}, "
-                  f"{d.get('location')})")
+            items = r.json().get("items") or []
+            print(f"  bucket answers   YES -- {len(items)} object(s) under guesty/")
+            for it in items:
+                print(f"     {it.get('name')}   last written {it.get('updated')}")
+        elif r.status_code == 403:
+            print("  bucket answers   403 on listing -- the key cannot read this "
+                  "bucket's objects")
         else:
-            print(f"  bucket answers   HTTP {r.status_code} -- the key may belong to "
-                  f"a different project than the bucket")
+            print(f"  bucket answers   HTTP {r.status_code}")
     except Exception as e:  # noqa: BLE001
         print(f"  bucket answers   could not check ({e.__class__.__name__})")
 
