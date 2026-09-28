@@ -25,6 +25,11 @@ on:
         required: false
         default: "06:45"
         type: string
+      drill:
+        description: "Force the alarm to prove the alert reaches you. Nothing is wrong when this is ticked."
+        required: false
+        default: false
+        type: boolean
 
   # Backstop only. GitHub's scheduler delivered every one of fifteen measured
   # runs 82 to 416 minutes late, so these cannot be the primary alarm -- a 6:45
@@ -65,4 +70,6 @@ jobs:
         run: |
           DEADLINE="${{ inputs.deadline }}"
           if [ -z "$DEADLINE" ]; then DEADLINE="06:45"; fi
-          python -u watchdog.py --deadline "$DEADLINE"
+          DRILL=""
+          if [ "${{ inputs.drill }}" = "true" ]; then DRILL="--drill"; fi
+          python -u watchdog.py --deadline "$DEADLINE" $DRILL

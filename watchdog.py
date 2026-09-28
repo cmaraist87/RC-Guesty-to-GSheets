@@ -101,7 +101,21 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--deadline", default="06:45",
                     help="America/Chicago local time, HH:MM")
+    ap.add_argument("--drill", action="store_true",
+                    help="Force the alarm, to prove the alert actually reaches "
+                         "somebody. Reads nothing and changes nothing.")
     args = ap.parse_args(argv)
+
+    # A drill. The whole design rests on 'the run goes red and GitHub emails
+    # Chris' -- an assumption worth proving once, and worth being able to
+    # re-prove after anyone changes their notification settings.
+    if args.drill:
+        print("WATCHDOG DRILL -- THIS IS NOT A REAL ALERT", file=sys.stderr)
+        print("  Nothing is wrong. This run was started by hand to check that "
+              "the alarm reaches somebody.", file=sys.stderr)
+        print("  A real alert names the date and says what to do about it.",
+              file=sys.stderr)
+        return 1
 
     from sync import load_config, state_store
     cfg = load_config()
