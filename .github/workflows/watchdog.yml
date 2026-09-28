@@ -1,0 +1,68 @@
+name: Did the sheet build this morning?
+
+# Turns silence into a failure.
+#
+# Two failures look nothing alike from outside. A sync that RUNS AND FAILS is
+# already visible: the run goes red and GitHub emails Chris -- he received the
+# 2026-09-23 one, so that channel is proven. A sync that NEVER RUNS is silent,
+# because nothing failed; the first anyone knows is a crew working yesterday's
+# sheet.
+#
+# So this job fails on purpose when the deadline has passed and the sync has
+# not completed, and the email that already works carries the news. When all is
+# well it exits quietly and nobody hears from it.
+#
+# It reads guesty/daily-run.json -- written by sync.py only AFTER the sheet has
+# been written. Deliberately NOT the sheet's own "last modified" time: that is
+# a shared file, so anyone ticking a box updates it, and it answers "was this
+# touched?" rather than "did the sync run?".
+
+on:
+  workflow_dispatch:
+    inputs:
+      deadline:
+        description: "America/Chicago local time the sync must have finished by"
+        required: false
+        default: "06:45"
+        type: string
+
+  # Backstop only. GitHub's scheduler delivered every one of fifteen measured
+  # runs 82 to 416 minutes late, so these cannot be the primary alarm -- a 6:45
+  # check arriving at 09:30 tells the crews nothing they have not already found
+  # out. Cloud Scheduler fires the real one, on the minute. These simply mean
+  # that if Cloud Scheduler itself dies, the day is still noticed eventually.
+  #
+  # A late check is still CORRECT: it asks whether the sync completed, not what
+  # time it is, so arriving late never produces a false alarm.
+  schedule:
+    - cron: "17 14 * * *"   # ~09:17 Chicago in summer, 08:17 in winter
+    - cron: "17 18 * * *"   # ~13:17 / 12:17
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # main, not the `live` tag: this watches the sync, it is not part of it,
+      # so a correction here should take effect without moving the pin.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-sync.txt
+
+      - name: Check this morning's run
+        env:
+          # Only what it takes to read the state record. No sheet id, no Guesty
+          # credentials, no Connecteam key -- this job cannot write anywhere.
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+        run: |
+          DEADLINE="${{ inputs.deadline }}"
+          if [ -z "$DEADLINE" ]; then DEADLINE="06:45"; fi
+          python -u watchdog.py --deadline "$DEADLINE"
