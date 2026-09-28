@@ -8,6 +8,11 @@ morning. This log starts at the point Phase 2 work resumed.
 
 Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 
+From 2026-09-22 this log also carries **daily-run reliability** work on the
+Guesty → Sheet system, matching invoice RCI-2026-03. That is new scope Chris
+asked for, not defect work — defect work stays unbilled, as agreed. Rows are
+marked so the two can be separated at invoice time.
+
 | Date | Hrs | Work | Status |
 |------|-----|------|--------|
 | 2026-09-12 | 0.75 | Phase 2 restart: reviewed `connecteam_client` / `connecteam_map` / `connecteam_push` against the post-Phase-1 codebase, confirmed the safety rails (create-only, `live=False` default, unassigned assertion, read-before-write duplicate guard), identified the four open design gaps, drafted the sequenced plan. | ✅ |
@@ -35,7 +40,16 @@ Rate and discount carry over from the Phase 1 invoice (family rate, 15%).
 | 2026-09-21 | 0.5 | Built the delete path -- the one thing the integration could not do. Board and window are both required, a card assigned to somebody is refused whatever the filters say, and it lists before it acts. Cleared 41 stale cards from the test board; 3 assigned ones correctly refused. | ✅ |
 | 2026-09-21 | 1.25 | Job administration established against the API: creation takes an ARRAY with `title` and `instanceIds` (two field names and the body shape all guessed wrong first), and titles are unique account-wide, so eight of the nine Austin properties could not be created a second time and had to be SHARED onto the test board instead via PUT. Since PUT replaces the record, each Job is read whole, only its board list changed, and every other field compared back field by field -- proved on one before the rest. **44 cards now on Chris Test, every one carrying its property as a Job.** | ✅ |
 
-**Total to date: 12.0 h**
+| 2026-09-22 | 0.5 | **[reliability]** Read-only lookup tools: everything Guesty and the sheet hold for a given reservation, and every sheet row for a property without spending a Guesty token. Built to answer the HMKMRDCK9Y / HMPJTAMCDS question. *Investigation itself absorbed; the tools billed.* | ✅ |
+| 2026-09-23 | 1.0 | Connecteam rollout readiness: every market sized by cards per month and by properties with no Job, reported per BOARD because two markets share each of the larger ones. Go-live order set from the figures — Austin 38 cards, Savannah/Thunderbolt 134, New Orleans/Bay St. Louis 431 — and 48 properties across the two larger boards found to have no Job, which would produce no card at all, silently. | ✅ |
+| 2026-09-24 | 1.5 | **[reliability]** Measured when the overnight run actually completed across 25 days: met the 6:45 deadline on 13, missed on 12, the split falling exactly where the schedule was last re-cut. Found two of the four triggers had NEVER counted — 23:47 and 00:19 Chicago, outside the once-a-day window, standing down on arrival every morning. Re-cut to 22 across the morning, then lowered the floor again after the first night landed later than any of the previous thirteen. | ✅ |
+| 2026-09-24 | 1.0 | **[reliability]** Built and proved the `as_scheduled` dispatch so an external, punctual trigger can drive the daily run — checking out the pinned tag, obeying the safety toggle, and claiming the day so Cloud Scheduler and GitHub's crons can never both sync. | ✅ |
+| 2026-09-24 | 0.5 | **[reliability]** Six-step setup document for the timed trigger, written to be followed without technical background and formatted to print. | ✅ |
+| 2026-09-26 | 0.5 | Scoped the change-timestamp column before building: confirmed a new column is carried and cannot make a row look changed again, that formatting is keyed by column NAME not position, and where it must sit to avoid the column-shift fault this sheet has had. Three decisions surfaced for the team. No code written. | ✅ |
+| 2026-09-28 | 1.25 | **[reliability]** **Watchdog built, tested and live.** A sync that runs and fails is already visible; a sync that never runs is silent, and that gap was open. It reads the completion record the sync already writes — not the sheet's 'last modified', which any crew member ticking a box would update — and fails on purpose when the deadline passes without a completed run, so the existing email carries the news. Ten tests, most of them about staying SILENT, because a monitor that cries wolf gets muted. Proved live in both directions, and a drill confirmed the email actually reaches Chris. Also confirmed the Google Cloud project the system runs in, and corrected a permissions check that reported a healthy setup as broken. | ✅ |
+
+**Total to date: 18.25 h**  
+*Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h). Unbilled so far: 1.75 h.*
 
 > Phase 1 work continues alongside and is **not** billed here.
 
