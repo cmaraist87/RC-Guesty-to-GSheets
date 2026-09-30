@@ -66,6 +66,42 @@ def _canonical_key(prop: str) -> str:
 _EXCLUDE_KEYS = {_canonical_key(p) for p in EXCLUDE_PROPERTIES}
 
 
+# Two Guesty listings that are ONE physical place.
+#
+# Keyed on the listing's Guesty ID, not its nickname: nicknames are renamed
+# constantly -- the code elsewhere says so and the account proves it -- while
+# the id never changes.
+#
+# 1401 Carondelet is let through two listings, "1401 Caron U V1" and "1401 Caron
+# A U V2", which normalize to "1401 Carondelet" and "1401 Carondelet A". The
+# sheet therefore showed them as two properties that never overlap, handing off
+# to each other: Blynn Austin out of one on 27 September at 11:00 and Lareina
+# Kostenchuk into the other at 16:00 the same day. That is one turnover shown as
+# two unrelated jobs, and it happened again on 16 October. The team confirmed on
+# 2026-09-29 that it is a single unit, and that the name is "1401 Carondelet".
+#
+# A NAME rule would be wrong here: 1409 Caron A, 1413 Caron B, 1417 Caron A and
+# 1421 Caron B are real, separate units in the same building, and stripping a
+# trailing letter would merge genuinely different places.
+LISTING_ALIASES = {
+    "6499c8299c3108003a52143a": "1401 Carondelet",   # 1401 Caron U V1
+    "64a306d203677d002cd4f956": "1401 Carondelet",   # 1401 Caron A U V2
+}
+
+
+def property_names(row) -> list:
+    """The propertie(s) a reservation row belongs to.
+
+    An alias on the listing id wins outright; everything else is parsed from the
+    nickname as before. Returned as a list because one combined listing can name
+    several units.
+    """
+    alias = LISTING_ALIASES.get(str(row.get("LISTING ID", "")).strip())
+    if alias:
+        return [alias]
+    return normalize_property(row.get("LISTING", ""))
+
+
 def _continue_unit_numbers(units: list[str]) -> list[str]:
     """"203&4&5" -> 203, 204, 205.
 
@@ -264,7 +300,7 @@ def process_reservations(
     checkin_guest   = {}   # (prop, date) -> (conf code, guest) of the ARRIVING stay
 
     for row in df_checkout.to_dict(orient="records"):
-        props   = normalize_property(row['LISTING'])
+        props   = property_names(row)
         co_dt   = parse_dt(f"{row['CHECK-OUT DATE']} {row['CHECK-OUT TIME']}")
         co_date = co_dt.strftime("%Y-%m-%d")
         city    = str(row.get("LISTING'S CITY", '')).strip()
@@ -281,7 +317,7 @@ def process_reservations(
                 city_by_key[_canonical_key(prop)] = city
 
     for row in df_checkin.to_dict(orient="records"):
-        props   = normalize_property(row['LISTING'])
+        props   = property_names(row)
         ci_dt   = parse_dt(f"{row['CHECK-IN DATE']} {row['CHECK-IN TIME']}")
         ci_date = ci_dt.strftime("%Y-%m-%d")
         city    = str(row.get("LISTING'S CITY", '')).strip()
