@@ -80,9 +80,22 @@ def attempts(board: str, sid: str, body: dict):
          f"/scheduler/v1/schedulers/{board}/shifts/{sid}", colour_only),
         ("PATCH full body", "PATCH",
          f"/scheduler/v1/schedulers/{board}/shifts/{sid}", body),
-        ("PUT   array at collection", "PUT",
+        # The collection endpoint answers 400, not 405: it EXISTS for PUT and
+        # only the body was wrong. So the shapes below are worth walking through
+        # one at a time -- the difference between "no such call" and "right call,
+        # wrong envelope" is the whole question.
+        ("PUT   [{id, ...all}]", "PUT",
+         f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, id=sid)]),
+        ("PUT   [{shiftId, ...all}]", "PUT",
+         f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, shiftId=sid)]),
+        ("PUT   [{id, color}]", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts",
-         [dict(body, id=sid)]),
+         [{"id": sid, "color": colour_only["color"]}]),
+        ("PUT   {shifts:[{id, ...all}]}", "PUT",
+         f"/scheduler/v1/schedulers/{board}/shifts",
+         {"shifts": [dict(body, id=sid)]}),
+        ("POST  [{id, ...all}]", "POST",
+         f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, id=sid)]),
     ]
 
 
@@ -150,8 +163,15 @@ def main(argv=None) -> int:
             client._request(method, path, body=body, tries=1)
         except ConnecteamError as e:
             msg = str(e)
-            short = msg.split("HTTP", 1)[-1][:70] if "HTTP" in msg else msg[:70]
-            print(f"refused  HTTP{short}")
+            body_txt = msg.split("HTTP", 1)[-1] if "HTTP" in msg else msg
+            head = body_txt[:60].strip()
+            print(f"refused  HTTP{head}")
+            # A 405 means the call does not exist and there is nothing to learn.
+            # A 400 means it does, and the rest of the message says what it
+            # wanted -- print it whole rather than clipping the answer off.
+            if "405" not in body_txt[:12]:
+                for j in range(60, min(len(body_txt), 1600), 110):
+                    print(f"        | {body_txt[j:j + 110].strip()}")
             continue
         after = read_back(client, sid)
         if after is None:
