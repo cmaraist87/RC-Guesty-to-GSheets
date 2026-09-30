@@ -331,6 +331,34 @@ def test_every_colour_we_send_is_one_the_api_accepts():
     print("OK: every colour sent is one the API named as valid")
 
 
+def test_the_client_colours_are_exactly_what_was_asked_for():
+    """Set by the client on 2026-09-29, and pinned here so a change to either
+    is a deliberate act rather than a stray edit.
+
+    The dark one goes to TURNOVERS on purpose: a guest arrives the same day, so
+    the clean has a hard deadline and should carry on a packed board. The first
+    proposal had these the other way round and would have made the urgent jobs
+    the palest thing on the schedule."""
+    from connecteam_map import STANDARD_COLOR, TURNOVER_COLOR
+    assert TURNOVER_COLOR == "#225A8C", TURNOVER_COLOR   # dark blue
+    assert STANDARD_COLOR == "#91B282", STANDARD_COLOR   # palest green
+    print("OK: turnovers dark blue, everything else palest green")
+
+
+def test_no_card_is_ever_red():
+    """RED IS THE TEAM'S, not ours. They colour day-off cards red, so a red job
+    card reads as a day off at a glance -- a crew could skip a real clean. The
+    turnover colour was #AE2121 until 2026-09-29, which is why this exists."""
+    from connecteam_map import ALLOWED_COLORS, STANDARD_COLOR, TURNOVER_COLOR
+    reds = {"#801A1A", "#AE2121", "#DC7A7A"}
+    assert reds <= set(ALLOWED_COLORS), "the palette's reds moved; re-check this list"
+    for row in (_row(), _row(**{"T/O": "yes"}),
+                _row(**{"T/O": "yes", "Adjustments": "ECO"})):
+        assert shift_for_row(row)["color"] not in reds, shift_for_row(row)["color"]
+    assert TURNOVER_COLOR not in reds and STANDARD_COLOR not in reds
+    print("OK: nothing we send is red -- red means a day off on their board")
+
+
 def test_the_test_board_is_not_a_live_one():
     """The whole point of a test board is that a mistake there reaches nobody.
     If its id ever collided with a market's, that guarantee would be silently gone.
@@ -354,6 +382,8 @@ if __name__ == "__main__":
     test_every_shift_is_unassigned()
     test_every_job_is_a_fixed_window_from_the_checkout()
     test_every_colour_we_send_is_one_the_api_accepts()
+    test_the_client_colours_are_exactly_what_was_asked_for()
+    test_no_card_is_ever_red()
     test_the_test_board_is_not_a_live_one()
     test_cities_resolve_to_their_own_timezone()
     test_the_title_says_the_kind_of_job_not_the_place()

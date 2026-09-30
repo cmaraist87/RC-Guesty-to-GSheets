@@ -97,8 +97,15 @@ ALLOWED_COLORS = (
     "#5687B3", "#7C9BA2", "#3968BB", "#85A6DA", "#225A8C",
 )
 
-TURNOVER_COLOR = "#AE2121"     # red: a turnover, where the clean has a hard deadline
-STANDARD_COLOR = "#3968BB"     # blue: an ordinary departure clean
+# Set by the client on 2026-09-29. Turnovers take the DARK colour because they
+# are the tight ones -- a guest arrives the same day, so the clean has a hard
+# deadline and should be the thing that carries on a packed board.
+#
+# RED IS NOT OURS TO USE. The team colour their own day-off cards red, so a red
+# job card would read as a day off at a glance. That is why the turnover colour
+# moved off #AE2121 rather than staying a strong warm colour.
+TURNOVER_COLOR = "#225A8C"     # dark blue: a turnover, with a hard deadline
+STANDARD_COLOR = "#91B282"     # palest green: an ordinary departure clean
 
 _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")
 
