@@ -194,8 +194,11 @@ jobs:
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
-              # Test board only; the script refuses any other.
-              python -u job_create.py --city "${{ inputs.city }}" $MONTH $CONFIRM ;;
+              # `property` may name a board. Creating a Job there is a PROPERTY
+              # record, not a card -- cards stay locked to the test board.
+              BOARD=""
+              if [ -n "${{ inputs.property }}" ]; then BOARD="--board ${{ inputs.property }} --market-board"; fi
+              python -u job_create.py --city "${{ inputs.city }}" $MONTH $BOARD $CONFIRM ;;
             job_fields)
               CREATE=""
               if [ "${{ inputs.write }}" = "true" ]; then CREATE="--create"; fi

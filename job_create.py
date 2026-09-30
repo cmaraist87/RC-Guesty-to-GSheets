@@ -76,13 +76,25 @@ def main(argv=None) -> int:
     ap.add_argument("--city", default="Austin")
     ap.add_argument("--month", default=None, metavar="YYYY-MM")
     ap.add_argument("--board", default=TEST_SCHEDULER,
-                    help="defaults to the test board; a market board is refused")
+                    help="defaults to the test board")
+    ap.add_argument("--market-board", action="store_true",
+                    help="allow --board to name a market board. Creates a JOB "
+                         "(a property record), never a card.")
     ap.add_argument("--confirm", action="store_true")
     args = ap.parse_args(argv)
 
-    if str(args.board) != TEST_SCHEDULER:
-        print(f"REFUSED: Jobs are only created on the test board "
-              f"({TEST_SCHEDULER}). A market board's Jobs are the team's.",
+    # A Job is a PROPERTY RECORD, not a shift. Creating one puts no work on
+    # anybody's phone -- cards remain locked to the test board by
+    # connecteam_push, which refuses --live without --test, and every card that
+    # is ever created goes to Unassigned via assert_unassigned.
+    #
+    # It is still a write to the team's live account, so it takes a flag of its
+    # own rather than riding on --confirm. Chris asked for 1802 Martin Luther
+    # King on the Austin board on 2026-09-30; without its Job that property's
+    # cleans produce no card at all, silently.
+    if str(args.board) != TEST_SCHEDULER and not args.market_board:
+        print(f"REFUSED: {args.board} is not the test board ({TEST_SCHEDULER}). "
+              f"Pass --market-board to create Jobs there deliberately.",
               file=sys.stderr)
         return 2
 
