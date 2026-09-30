@@ -31,6 +31,7 @@ on:
           - job_share        # can a Job be added to a second board? (our Job only)
           - job_share_run    # ADD the test board to existing Jobs (reversible)
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
+          - shift_update     # can a card's COLOUR be changed in place? (test board)
           - board_peek       # every card on one board, by id (read-only)
           - shift_fields     # our card beside the team's, field by field
           - shift_delete     # DELETES cards from one board (needs write)
@@ -208,6 +209,7 @@ jobs:
               CREATE=""
               if [ "${{ inputs.write }}" = "true" ]; then CREATE="--create"; fi
               python -u job_fields.py $CREATE ;;
+            shift_update) python -u shift_update_probe.py ;;
             shift_delete)
               # `property` is the board id; from/to bound the window;
               # `code` optionally narrows to titles containing it.

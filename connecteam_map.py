@@ -91,10 +91,20 @@ DEFAULT_CLEAN_HOURS = CARD_MINUTES / 60.0     # kept: callers pass hours
 # These are the values the API itself named in that rejection. The list is longer
 # than this -- the error was truncated in the log -- but every entry here came from
 # the API, not from a colour picker.
+# All 33, verbatim from the API's own rejection on 2026-09-30, in its order and
+# its casing -- the greys really do come back lowercase.
+#
+# This was 19 for three weeks. The rejection that enumerates the palette was
+# being truncated at 400 characters by the client, and 19 is simply where the
+# cut fell; the probe written to check the constant read the same truncated
+# string and "confirmed" it. The last three are the row Chris described as
+# black / dark gray / light gray, and none of them were reachable.
 ALLOWED_COLORS = (
     "#4B7AC5", "#801A1A", "#AE2121", "#DC7A7A", "#B0712E", "#D4985A", "#E4B37F",
     "#AE8E2D", "#CBA73A", "#D9B443", "#487037", "#6F9B5C", "#91B282", "#365C64",
-    "#5687B3", "#7C9BA2", "#3968BB", "#85A6DA", "#225A8C",
+    "#5687B3", "#7C9BA2", "#3968BB", "#85A6DA", "#225A8C", "#548CBE", "#81A8CC",
+    "#4E3F75", "#604E8E", "#8679AA", "#983D73", "#A43778", "#D178AD", "#6B2E4C",
+    "#925071", "#B57D9A", "#3a3a3a", "#616161", "#969696",
 )
 
 # Set by the client: blue for turnovers, palest green for every other clean.
@@ -116,6 +126,16 @@ ALLOWED_COLORS = (
 # moved off #AE2121 in the first place rather than staying a strong warm one.
 TURNOVER_COLOR = "#85A6DA"     # light royal blue: a turnover, same-day arrival
 STANDARD_COLOR = "#91B282"     # palest green: an ordinary departure clean
+CANCELLED_COLOR = "#969696"    # light gray: the booking was cancelled
+
+# CHRIS TEST ONLY, for now. Asked for on 2026-09-30 in those words.
+#
+# A separate gate from the card lock in connecteam_push, and deliberately so.
+# That lock says WHICH BOARDS may receive cards at all; this says which boards
+# get the cancelled colour once they can. When a market board is eventually
+# signed off for cards, greying cancellations there is a second decision, and
+# this set is where it gets made -- not something that arrives with the first.
+CANCELLED_COLOR_BOARDS = frozenset({TEST_SCHEDULER})
 
 _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")
 
@@ -189,11 +209,17 @@ def shift_title(row, with_codes: bool | None = None) -> str:
 
 
 def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS,
-                  job_index=None) -> dict | None:
+                  job_index=None, cancelled: bool = False) -> dict | None:
     """One sheet row -> one Connecteam shift payload, or None if it is not a job.
 
     Returns the payload only; the scheduler it belongs to is the caller's business,
     since that is how the city is expressed in Connecteam's URL.
+
+    `cancelled` paints the card light gray. It has to be passed IN rather than
+    read off the row, because a cancellation is not in the row's values at all --
+    it is strikethrough on the cells, which means a second read of the sheet's
+    FORMAT. The caller does that read (sheets_client.read_row_marks) and says so
+    here. A row object alone cannot answer the question.
     """
     checkout = str(row.get("Check-out Time", "") or row.get("Check out - Time", "")).strip()
     if not checkout:
@@ -228,7 +254,11 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS,
         "endTime": int(end.timestamp()),
         "timezone": tz,
         "title": shift_title(row),
-        "color": TURNOVER_COLOR if is_turnover else STANDARD_COLOR,
+        # Cancelled wins over turnover. A cancelled turnover is not urgent work
+        # with a caveat; it is not work. Showing it light royal blue because the
+        # booking it replaced would have been tight is exactly backwards.
+        "color": (CANCELLED_COLOR if cancelled
+                  else TURNOVER_COLOR if is_turnover else STANDARD_COLOR),
         "isOpenShift": True,               # -> Unassigned
         # Sent explicitly empty rather than omitted. The API documents
         # "must be empty for open shifts", and an empty list states that we meant
@@ -243,13 +273,23 @@ def shift_for_row(row, clean_hours: float = DEFAULT_CLEAN_HOURS,
 
 
 def shifts_for_rows(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
-                    job_index=None):
+                    job_index=None, cancelled_pos=frozenset()):
     """[(row, payload)] for every row that is a job. Pairs so the caller can write
-    the resulting shift id back to the row it came from."""
+    the resulting shift id back to the row it came from.
+
+    `cancelled_pos` holds 0-based DATA-row positions, exactly as
+    sheets_client.read_row_marks returns them -- data row 0 is grid row 2. That
+    lines up with this frame's index because read_as_dataframe builds it from
+    values[1:] with a default RangeIndex, so position, index and data row are
+    the same number. Anything that reindexes or filters the frame before it gets
+    here breaks that, which is why the positions are matched on the FULL frame
+    and the city filter happens afterwards.
+    """
     out = []
-    for _, row in rows.iterrows():
+    for i, row in rows.iterrows():
         payload = shift_for_row(row, clean_hours=clean_hours,
-                                job_index=job_index)
+                                job_index=job_index,
+                                cancelled=i in cancelled_pos)
         if payload is not None:
             out.append((row, payload))
     return out
@@ -257,7 +297,7 @@ def shifts_for_rows(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
 
 def shifts_by_scheduler(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
                         only_city: str | None = None,
-                        job_index=None) -> dict[str, list]:
+                        job_index=None, cancelled_pos=frozenset()) -> dict[str, list]:
     """{scheduler id -> [(row, payload)]}, ready to post one board at a time.
 
     Grouped by board rather than returned flat because that is how the rollout has
@@ -271,7 +311,8 @@ def shifts_by_scheduler(rows, clean_hours: float = DEFAULT_CLEAN_HOURS,
     wanted = norm_city(only_city) if only_city else None
     out: dict[str, list] = {}
     for row, payload in shifts_for_rows(rows, clean_hours=clean_hours,
-                                        job_index=job_index):
+                                        job_index=job_index,
+                                        cancelled_pos=cancelled_pos):
         city = row.get("City", "")
         if wanted is not None and norm_city(city) != wanted:
             continue
