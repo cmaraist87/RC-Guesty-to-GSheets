@@ -109,8 +109,15 @@ class ConnecteamClient:
                 delay = min(delay * 2, 30)
                 continue
             if resp.status_code >= 400:
+                # 4000, not 400. The old limit cost a whole investigation: the
+                # rejection for a bad colour ENUMERATES every colour the API
+                # accepts, and that list is longer than 400 characters, so it
+                # arrived cut off mid-way. Both the ALLOWED_COLORS constant and
+                # the probe that was supposed to check it read the same
+                # truncated string and agreed with each other -- which looked
+                # like confirmation and was not. Diagnostic text is cheap.
                 raise ConnecteamError(
-                    f"{method} {path} -> HTTP {resp.status_code}: {resp.text[:400]}")
+                    f"{method} {path} -> HTTP {resp.status_code}: {resp.text[:4000]}")
             try:
                 return resp.json()
             except ValueError:

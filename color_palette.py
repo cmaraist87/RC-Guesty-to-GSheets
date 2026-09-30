@@ -81,6 +81,15 @@ def main(argv=None) -> int:
     except ConnecteamError as e:
         raw = str(e)
 
+    # The RAW rejection, before any parsing. Printed because the parsed view is
+    # what hid the greys: the error body used to arrive truncated, and a regex
+    # over a truncated string reports a confident, wrong answer.
+    print("  ---- raw rejection, verbatim ----")
+    for line in (raw[i:i + 100] for i in range(0, min(len(raw), 4000), 100)):
+        print(f"  | {line}")
+    print("  ---- end raw ----")
+    print("")
+
     found = sorted({m.upper() for m in re.findall(r"#[0-9a-fA-F]{6}", raw)})
     print(f"the API named {len(found)} colour(s):")
     print("")
