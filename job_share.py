@@ -3,9 +3,12 @@
     python job_share.py --city Austin --month 2026-10            # list only
     python job_share.py --city Austin --month 2026-10 --confirm
     python job_share.py ... --revert                             # take it back off
+    python job_share.py ... --board 10540759 --market-board      # onto a market
 
-Adds the TEST board to a Job's `instanceIds`. It does NOT remove any board, does
-NOT move a Job, and puts no card on anybody's schedule.
+ADDS a board to a Job's `instanceIds`. It does NOT remove any board, does NOT
+move a Job, and puts no card on anybody's schedule. The board defaults to the
+test board; naming any other takes --market-board, because a Job shared onto a
+market board shows up in that market's Job picker.
 
 WHY
 ---
@@ -90,11 +93,25 @@ def main(argv=None) -> int:
     ap.add_argument("--month", default=None)
     ap.add_argument("--limit", type=int, default=0,
                     help="only touch this many, for proving it on one first")
+    ap.add_argument("--board", default=TEST_SCHEDULER,
+                    help="the board to add the Job to. Defaults to the test "
+                         "board; any other needs --market-board.")
+    ap.add_argument("--market-board", action="store_true",
+                    help="permit --board to name a real market's board.")
     ap.add_argument("--revert", action="store_true")
     ap.add_argument("--confirm", action="store_true")
     args = ap.parse_args(argv)
 
-    tid = int(TEST_SCHEDULER)
+    # Sharing a Job onto a MARKET board is visible to that market's crews in
+    # the Job picker, so it takes a flag of its own rather than riding on
+    # --confirm. It still puts no card on anybody's schedule.
+    if str(args.board) != TEST_SCHEDULER and not args.market_board:
+        print(f"REFUSED: {args.board} is not the test board ({TEST_SCHEDULER}). "
+              f"Pass --market-board to share onto it deliberately.",
+              file=sys.stderr)
+        return 2
+
+    tid = int(args.board)
     cfg = load_config()
     ym = args.month or _today_chicago().strftime("%Y-%m")
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
@@ -106,17 +123,17 @@ def main(argv=None) -> int:
     props = wanted_properties(rows, args.city)
 
     client = ConnecteamClient(check_api_key(os.environ.get("CONNECTEAM_API_KEY", "")))
-    all_jobs, _how = client.list_jobs(TEST_SCHEDULER)
+    all_jobs, _how = client.list_jobs(args.board)
     live = usable(all_jobs)                       # deleted ones are never touched
     by_norm = {}
     for j in live:
         by_norm.setdefault(norm(j.get("title") or j.get("name") or ""), []).append(j)
 
-    on_test = build_index(all_jobs, board=TEST_SCHEDULER)
+    on_board = build_index(all_jobs, board=args.board)
     todo = []
     for p in props:
-        if not args.revert and resolve(p, on_test)[0]:
-            continue                              # already usable on the test board
+        if not args.revert and resolve(p, on_board)[0]:
+            continue                              # already usable on that board
         cands = by_norm.get(norm(p)) or []
         if not cands:
             continue
@@ -126,7 +143,7 @@ def main(argv=None) -> int:
             continue
         todo.append((p, best, ids))
 
-    verb = "remove the test board from" if args.revert else "add the test board to"
+    verb = "remove board %s from" % args.board if args.revert else            "add board %s to" % args.board
     print(f"{args.city} {ym}: {len(todo)} Job(s) to {verb}:")
     for p, j, ids in todo:
         print(f"   {p:<30} {j.get('title')!r}  instanceIds {ids}")

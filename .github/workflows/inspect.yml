@@ -184,7 +184,12 @@ jobs:
               EXTRA=""
               if [ "${{ inputs.code }}" = "revert" ]; then EXTRA="--revert"; fi
               if [ -n "${{ inputs.from }}" ]; then EXTRA="$EXTRA --limit ${{ inputs.from }}"; fi
-              python -u job_share.py --city "${{ inputs.city }}" $MONTH $EXTRA $CONFIRM ;;
+              # `property` may name the board to share ONTO. Sharing adds a
+              # board to a Job's instanceIds and removes none -- it makes the
+              # property pickable there and puts no card on anybody's schedule.
+              BOARD=""
+              if [ -n "${{ inputs.property }}" ]; then BOARD="--board ${{ inputs.property }} --market-board"; fi
+              python -u job_share.py --city "${{ inputs.city }}" $MONTH $BOARD $EXTRA $CONFIRM ;;
             job_share)
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
