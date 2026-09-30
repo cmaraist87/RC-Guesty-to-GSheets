@@ -50,6 +50,22 @@ def main(argv=None) -> int:
     print(f"   carrying a jobId : {with_job}")
     print(f"   carrying a title : {titled}")
 
+    # Colour, by name rather than hex. The client sets these, so a tally is how
+    # you check what the crews will actually see: turnovers dark blue, every
+    # other clean palest green, and never red -- red is the team's day-off card.
+    names = {"#225A8C": "dark blue  (turnover)", "#91B282": "palest green (clean)",
+             "#3968BB": "mid blue   (old clean)", "#AE2121": "red        (old turnover)",
+             "#801A1A": "dark red", "#DC7A7A": "light red", "#D9B443": "yellow",
+             "#CBA73A": "yellow", "#AE8E2D": "dark yellow", "#487037": "dark green",
+             "#6F9B5C": "mid green", "#4B7AC5": "mid blue", "#85A6DA": "light blue",
+             "#5687B3": "mid blue", "#225A8C ": "dark blue", "#365C64": "dark teal",
+             "#7C9BA2": "mid teal", "#B0712E": "dark orange", "#D4985A": "mid orange",
+             "#E4B37F": "light orange"}
+    cols = Counter(str(s.get("color", "")).strip().upper() or "(none)" for s in shifts)
+    print("   colours in use:")
+    for c, n in cols.most_common():
+        print(f"      {n:>4}  {c:<9} {names.get(c, '')}")
+
     kinds = Counter(str(s.get("title", "")).strip() or "(no title)" for s in shifts)
     print("   titles in use:")
     for t, n in kinds.most_common(12):
