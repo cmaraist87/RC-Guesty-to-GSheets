@@ -121,6 +121,17 @@ def attempts(board: str, sid: str, body: dict):
         ("PUT   v2 [{shiftId, colour}]", "PUT",
          f"/scheduler/v2/schedulers/{board}/shifts",
          [{"shiftId": sid, "color": colour_only["color"]}]),
+        # v2 takes the shape and the field names; it objects only to "shift id is
+        # invalid". The ids this board hands out are compound --
+        # "6abda1fb...:4acf6287-ee55-..." -- and DELETE wants the whole thing, so
+        # v2 presumably wants one half. Try each; whichever half it is, it is a
+        # fact about this API worth having written down.
+        ("PUT   v2 id BEFORE the colon", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts",
+         [dict(no_spots, shiftId=sid.split(":", 1)[0])]),
+        ("PUT   v2 id AFTER the colon", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts",
+         [dict(no_spots, shiftId=sid.split(":", 1)[-1])]),
         # Left last on purpose: POST does not update, it CREATES, so this one
         # leaves a duplicate behind. Harmless on the test board and cleaned up
         # by title below, but it is why cleanup cannot go by id alone.
