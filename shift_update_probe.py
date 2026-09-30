@@ -71,6 +71,11 @@ def attempts(board: str, sid: str, body: dict):
     account, so it is the house style rather than a guess.
     """
     colour_only = {"color": body["color"]}
+    # openSpots removed: V1 rejects it outright on an update, and if V2 shares
+    # the rule there is no reason to send it. Nothing else is dropped -- the card
+    # goes back exactly as it was read, with one field changed.
+    no_spots = {k: v for k, v in dict(body, shiftId=sid).items()
+                if k != "openSpots"}
     return [
         ("PUT   full body", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts/{sid}", body),
@@ -101,6 +106,21 @@ def attempts(board: str, sid: str, body: dict):
         ("PUT   {shifts:[{id, ...all}]}", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts",
          {"shifts": [dict(body, id=sid)]}),
+        # V1 says "not supported in V1 update", which is the API telling us a V2
+        # exists. And it says "can't edit root open shift with multiple open
+        # spots" -- ours has ONE spot, so "root open shift" is the objection, not
+        # the count: an open shift is a parent record and V1 will not touch it.
+        # Every card we make is an open shift, so V1 is a dead end by design and
+        # V2 is the only thing left worth asking.
+        ("PUT   v2 [{shiftId}]", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts", [no_spots]),
+        ("PUT   v2 /{shiftId}", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts/{sid}", no_spots),
+        ("PATCH v2 /{shiftId}", "PATCH",
+         f"/scheduler/v2/schedulers/{board}/shifts/{sid}", no_spots),
+        ("PUT   v2 [{shiftId, colour}]", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts",
+         [{"shiftId": sid, "color": colour_only["color"]}]),
         # Left last on purpose: POST does not update, it CREATES, so this one
         # leaves a duplicate behind. Harmless on the test board and cleaned up
         # by title below, but it is why cleanup cannot go by id alone.
