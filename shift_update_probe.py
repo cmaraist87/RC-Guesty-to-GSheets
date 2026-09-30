@@ -86,6 +86,13 @@ def attempts(board: str, sid: str, body: dict):
         # wrong envelope" is the whole question.
         ("PUT   [{id, ...all}]", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, id=sid)]),
+        # THE ONE THAT WORKS. `shiftId`, not `id`, and openSpots must be gone:
+        # the API says "The open_spots parameter is not supported in V1 update"
+        # -- an objection to one field, which is the endpoint working, not
+        # refusing. Everything else goes back exactly as it was read.
+        ("PUT   [{shiftId, no openSpots}]", "PUT",
+         f"/scheduler/v1/schedulers/{board}/shifts",
+         [{k: v for k, v in dict(body, shiftId=sid).items() if k != "openSpots"}]),
         ("PUT   [{shiftId, ...all}]", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, shiftId=sid)]),
         ("PUT   [{id, color}]", "PUT",
@@ -94,6 +101,9 @@ def attempts(board: str, sid: str, body: dict):
         ("PUT   {shifts:[{id, ...all}]}", "PUT",
          f"/scheduler/v1/schedulers/{board}/shifts",
          {"shifts": [dict(body, id=sid)]}),
+        # Left last on purpose: POST does not update, it CREATES, so this one
+        # leaves a duplicate behind. Harmless on the test board and cleaned up
+        # by title below, but it is why cleanup cannot go by id alone.
         ("POST  [{id, ...all}]", "POST",
          f"/scheduler/v1/schedulers/{board}/shifts", [dict(body, id=sid)]),
     ]
@@ -205,19 +215,37 @@ def main(argv=None) -> int:
         return 0 if winner else 1
 
     print("")
-    try:
-        client._request(
-            "DELETE", f"/scheduler/v1/schedulers/{TEST_SCHEDULER}/shifts/{sid}")
-        gone = read_back(client, sid) is None
-        print(f"probe card deleted{'' if gone else ' -- BUT IT IS STILL THERE'}; "
-              f"board is as it was." if gone else
-              f"probe card delete returned OK but the card is STILL on the board "
-              f"(id {sid}).")
-    except ConnecteamError as e:
-        print(f"COULD NOT DELETE the probe card {sid}: {e}", file=sys.stderr)
-        print(f"Remove it by hand: it is titled {TITLE!r} on "
-              f"{WHEN:%d %b %Y}.", file=sys.stderr)
+    # By TITLE, not by the one id we started with. The POST attempt creates a
+    # second card instead of updating the first, so going by id would leave a
+    # stray probe card on the board -- which is exactly what happened on the
+    # 2026-09-30 run before this loop existed.
+    lo = int((WHEN - timedelta(days=2)).timestamp())
+    hi = int((WHEN + timedelta(days=2)).timestamp())
+    mine = [s for s in client.existing_shifts(TEST_SCHEDULER, lo, hi)
+            if str(s.get("title")) == TITLE]
+    print(f"cleaning up: {len(mine)} card(s) titled {TITLE!r} on the test board")
+    failed = []
+    for s in mine:
+        one = str(s.get("id"))
+        if s.get("assignedUserIds"):
+            # Should be impossible for a card this probe made, but the rule is
+            # the rule: an assigned card is somebody's shift.
+            print(f"   REFUSING to delete {one}: somebody is assigned to it")
+            failed.append(one)
+            continue
+        try:
+            client._request(
+                "DELETE", f"/scheduler/v1/schedulers/{TEST_SCHEDULER}/shifts/{one}")
+        except ConnecteamError as e:
+            print(f"   could not delete {one}: {str(e)[:120]}")
+            failed.append(one)
+    left = [s for s in client.existing_shifts(TEST_SCHEDULER, lo, hi)
+            if str(s.get("title")) == TITLE]
+    if left or failed:
+        print(f"   !! {len(left)} probe card(s) STILL on the board. Remove by "
+              f"hand: titled {TITLE!r} on {WHEN:%d %b %Y}.", file=sys.stderr)
         return 1
+    print("   board is as it was; nothing of the probe remains.")
     return 0 if winner else 1
 
 
