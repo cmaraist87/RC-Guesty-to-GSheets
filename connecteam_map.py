@@ -97,14 +97,24 @@ ALLOWED_COLORS = (
     "#5687B3", "#7C9BA2", "#3968BB", "#85A6DA", "#225A8C",
 )
 
-# Set by the client on 2026-09-29. Turnovers take the DARK colour because they
-# are the tight ones -- a guest arrives the same day, so the clean has a hard
-# deadline and should be the thing that carries on a packed board.
+# Set by the client: blue for turnovers, palest green for every other clean.
+# The exact blue is theirs to pick and has moved once -- dark (#225A8C) on
+# 2026-09-29, light royal (#85A6DA) on 2026-09-30.
+#
+# #85A6DA is the only light royal blue the palette holds: hue 217, eight
+# degrees off CSS royalblue and the one blue lighter than it.
+#
+# Note what the lighter blue costs, in case it ever needs revisiting. The dark
+# one separated turnovers from ordinary cleans by 142 in RGB terms; this one by
+# 90, against a green of almost the same lightness (69% vs 60%). Turnovers are
+# the tight jobs -- a guest arrives the same day -- so they no longer carry as
+# far on a packed board. The client asked for it with the boards in front of
+# them, so it stands; it is recorded here and not re-argued.
 #
 # RED IS NOT OURS TO USE. The team colour their own day-off cards red, so a red
 # job card would read as a day off at a glance. That is why the turnover colour
-# moved off #AE2121 rather than staying a strong warm colour.
-TURNOVER_COLOR = "#225A8C"     # dark blue: a turnover, with a hard deadline
+# moved off #AE2121 in the first place rather than staying a strong warm one.
+TURNOVER_COLOR = "#85A6DA"     # light royal blue: a turnover, same-day arrival
 STANDARD_COLOR = "#91B282"     # palest green: an ordinary departure clean
 
 _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")

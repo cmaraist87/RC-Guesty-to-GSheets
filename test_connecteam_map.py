@@ -335,12 +335,15 @@ def test_the_client_colours_are_exactly_what_was_asked_for():
     """Set by the client on 2026-09-29, and pinned here so a change to either
     is a deliberate act rather than a stray edit.
 
-    The dark one goes to TURNOVERS on purpose: a guest arrives the same day, so
-    the clean has a hard deadline and should carry on a packed board. The first
-    proposal had these the other way round and would have made the urgent jobs
-    the palest thing on the schedule."""
+    BLUE goes to TURNOVERS and green to everything else. That pairing is the
+    part the client actually fixed; the exact blue is theirs to move, and has
+    moved -- dark #225A8C on 2026-09-29, light royal #85A6DA on 2026-09-30.
+    Both times it was asked for explicitly, which is the only way it changes.
+
+    An earlier proposal had the two the other way round -- green on turnovers --
+    and this pin exists so that cannot come back by accident."""
     from connecteam_map import STANDARD_COLOR, TURNOVER_COLOR
-    assert TURNOVER_COLOR == "#225A8C", TURNOVER_COLOR   # dark blue
+    assert TURNOVER_COLOR == "#85A6DA", TURNOVER_COLOR   # light royal blue
     assert STANDARD_COLOR == "#91B282", STANDARD_COLOR   # palest green
     print("OK: turnovers dark blue, everything else palest green")
 
