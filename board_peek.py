@@ -53,7 +53,15 @@ def main(argv=None) -> int:
     # Colour, by name rather than hex. The client sets these, so a tally is how
     # you check what the crews will actually see: turnovers dark blue, every
     # other clean palest green, and never red -- red is the team's day-off card.
-    names = {"#85A6DA": "light royal blue (turnover)",
+    names = {"#969696": "LIGHT GRAY (cancelled)",
+             "#616161": "dark gray", "#3a3a3a": "near-black",
+             "#548CBE": "mid blue", "#81A8CC": "light blue",
+             "#4E3F75": "dark purple", "#604E8E": "mid purple",
+             "#8679AA": "light purple", "#983D73": "dark magenta",
+             "#A43778": "magenta", "#D178AD": "light pink",
+             "#6B2E4C": "dark plum", "#925071": "mid plum",
+             "#B57D9A": "light plum",
+             "#85A6DA": "light royal blue (turnover)",
              "#91B282": "palest green (clean)",
              "#225A8C": "dark blue  (old turnover)",
              "#3968BB": "mid blue   (old clean)", "#AE2121": "red        (old turnover)",
