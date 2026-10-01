@@ -29,7 +29,8 @@ import time
 
 import requests
 
-from connecteam_map import assert_unassigned
+from connecteam_map import (CANCELLED_COLOR, STANDARD_COLOR,
+                            TURNOVER_COLOR, assert_unassigned)
 
 BASE = "https://api.connecteam.com"
 TIMEOUT = 30
@@ -412,6 +413,15 @@ class ConnecteamClient:
         return created
 
 
+# Only the three this system sends. Anything else prints its hex, which is the
+# right answer for a card the team coloured themselves.
+COLOUR_NAMES = {
+    STANDARD_COLOR.upper(): "green",
+    TURNOVER_COLOR.upper(): "BLUE t/o",
+    CANCELLED_COLOR.upper(): "GRAY canc",
+}
+
+
 def _fmt(shift: dict, job_names=None) -> str:
     """One line per card, for a list somebody has to read before it becomes real.
 
@@ -427,5 +437,9 @@ def _fmt(shift: dict, job_names=None) -> str:
     end = datetime.fromtimestamp(int(shift["endTime"]), tz)
     jid = str(shift.get("jobId") or "")
     where = (job_names or {}).get(jid) or (jid[:8] if jid else "(no Job)")
+    # The colour, by name. A preview exists to be checked before anything is
+    # real, and until cancellations went gray there was no way to check a colour
+    # from one: every line looked the same whatever was about to be sent.
+    colour = COLOUR_NAMES.get(str(shift.get("color") or "").upper(), "")
     return (f"{start:%a %d %b %H:%M}-{end:%H:%M} {shift.get('timezone','')}  "
-            f"{where:<32} {shift.get('title','')}  [Unassigned]")
+            f"{where:<32} {shift.get('title',''):<9} {colour:<10} [Unassigned]")
