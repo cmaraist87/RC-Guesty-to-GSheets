@@ -240,6 +240,123 @@ class ConnecteamClient:
         return [], " | ".join(tried)
 
     # --- writing ----------------------------------------------------------
+    # Not sent on an update. V1 answers "The open_spots parameter is not
+    # supported in V1 update"; V2 takes the card without it.
+    NOT_ON_UPDATE = ("openSpots", "id", "shiftId")
+
+    @staticmethod
+    def update_id(shift: dict) -> str:
+        """The id V2's update wants, which is NOT the id DELETE wants.
+
+        A card's id on this board is compound -- "6abda1fb827287b856d7f9db:
+        4acf6287-ee55-4e94-a479-f2a99e246463". DELETE needs the whole string.
+        V2's update needs only the part BEFORE the colon and answers "shift id is
+        invalid" (1004) for the whole thing or for the half after it. Established
+        by shift_update_probe on 2026-09-30; nothing documents it.
+        """
+        return str(shift.get("id") or shift.get("shiftId") or "").split(":", 1)[0]
+
+    def recolour_shift(self, scheduler_id: str, shift: dict, color: str) -> dict:
+        """Repaint ONE existing card. Returns the response; caller verifies.
+
+        PUT /scheduler/v2/schedulers/{board}/shifts, body [{shiftId, ...}].
+
+        v2, because v1 cannot do it: every card this system makes is an open
+        shift, and v1 refuses those with "can't edit root open shift" whatever
+        the open-spot count. Both facts were found by probing, not reading docs.
+
+        The card is sent back WHOLE with one field changed, the way job_share
+        writes a Job back, because this is a replace and anything left out is a
+        field volunteered for deletion.
+        """
+        sid = self.update_id(shift)
+        if not sid:
+            raise ConnecteamError("cannot recolour a card with no id")
+        body = {k: v for k, v in shift.items() if k not in self.NOT_ON_UPDATE}
+        body["shiftId"] = sid
+        body["color"] = color
+        # The standing rule applies to an update exactly as it does to a create:
+        # a card must not come back with somebody on it.
+        assert_unassigned([body])
+        return self._request(
+            "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts", body=[body])
+
+    def recolour_mismatched(self, scheduler_id: str, shifts: list[dict],
+                            live: bool = False, job_names=None) -> list[tuple]:
+        """Repaint cards ALREADY on the board whose colour has since changed.
+
+        Returns [(shift, was, now)] for every card repainted (or that would be).
+
+        This is the half create_shifts structurally cannot do. It compares what
+        it wants against the board and SKIPS the matches, which is right for not
+        duplicating work and wrong for a card whose booking was cancelled after
+        it was created: the card is "already there", so it is skipped, so it
+        stays the colour it was born.
+
+        Matched on _shift_key -- (jobId, title, startTime) -- the same key
+        create_shifts skips on, so the two agree by construction about which
+        desired card is which existing card.
+        """
+        if not shifts:
+            return []
+        lo = min(int(s["startTime"]) for s in shifts)
+        hi = max(int(s["endTime"]) for s in shifts)
+        on_board = {}
+        for existing in self.existing_shifts(scheduler_id, lo, hi):
+            on_board.setdefault(_shift_key(existing), existing)
+
+        todo = []
+        for want in shifts:
+            existing = on_board.get(_shift_key(want))
+            if existing is None:
+                continue                       # not there yet; create_shifts' job
+            was = str(existing.get("color") or "")
+            now = str(want.get("color") or "")
+            if not now or was.upper() == now.upper():
+                continue
+            todo.append((existing, was, now))
+
+        if not todo:
+            print(f"   scheduler {scheduler_id}: every card already on the board "
+                  f"is the right colour.")
+            return []
+
+        if not live:
+            print(f"   scheduler {scheduler_id}: WOULD repaint {len(todo)} card(s). "
+                  f"Nothing was sent.")
+            for existing, was, now in todo:
+                print(f"     {was} -> {now}   {_fmt(existing, job_names)}")
+            return []
+
+        done = []
+        for existing, was, now in todo:
+            try:
+                self.recolour_shift(scheduler_id, existing, now)
+            except ConnecteamError as e:
+                print(f"     !! could not repaint {self.update_id(existing)}: "
+                      f"{str(e)[:160]}")
+                continue
+            done.append((existing, was, now))
+            print(f"     {was} -> {now}   {_fmt(existing, job_names)}")
+
+        # Read the board back. An accepted request is not a changed card -- the
+        # Sheets half of this project lost days to exactly that distinction, and
+        # the POST attempt in shift_update_probe returned 200 and did nothing.
+        after = {}
+        for s2 in self.existing_shifts(scheduler_id, lo, hi):
+            after.setdefault(_shift_key(s2), s2)
+        stuck = [(e, was, now) for e, was, now in done
+                 if str((after.get(_shift_key(e)) or {}).get("color", "")).upper()
+                 != now.upper()]
+        print(f"   scheduler {scheduler_id}: repainted {len(done) - len(stuck)} "
+              f"of {len(todo)} card(s), confirmed by reading the board back.")
+        if stuck:
+            print(f"   !! {len(stuck)} card(s) were ACCEPTED but did not change "
+                  f"colour on the board:")
+            for e, was, now in stuck:
+                print(f"      {self.update_id(e)} still {was}, wanted {now}")
+        return [t for t in done if t not in stuck]
+
     def create_shifts(self, scheduler_id: str, shifts: list[dict],
                       live: bool = False, skip_existing: bool = True,
                       job_names=None) -> list[dict]:

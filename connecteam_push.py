@@ -21,10 +21,12 @@ import sys
 
 from connecteam_client import ConnecteamClient, ConnecteamError
 from connecteam_jobs import build_index, resolve, usable
-from connecteam_map import (CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
+from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
+                            CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
                             shifts_by_scheduler)
 from sheet_merge import norm_city
-from sheets_client import month_worksheets, open_spreadsheet, read_as_dataframe
+from sheets_client import (month_worksheets, open_spreadsheet,
+                           read_as_dataframe, read_row_marks)
 from sync import _spanish_tab, _today_chicago, load_config
 
 
@@ -90,6 +92,26 @@ def main(argv=None) -> int:
     rows, _ = read_as_dataframe(ws)
     print(f"Read {len(rows)} row(s) from '{ws.title}'.")
 
+    # A SECOND read of the same tab, for its FORMAT. A cancellation is not in
+    # any cell's value -- it is strikethrough on the row -- so the frame above
+    # cannot answer "was this cancelled?" and never could. Positions come back
+    # 0-based over data rows, which is the frame's own index.
+    #
+    # Gated to the boards in CANCELLED_COLOR_BOARDS. Chris asked for grey
+    # cancellations on Chris Test "for now", and a market board getting cards one
+    # day must not silently inherit this as well.
+    target_board = TEST_SCHEDULER if args.test else board
+    struck, _hl, _acc = read_row_marks(ws)
+    if target_board in CANCELLED_COLOR_BOARDS:
+        cancelled_pos = struck
+        print(f"{len(struck)} row(s) on this tab are struck through (cancelled); "
+              f"their cards go {CANCELLED_COLOR} on board {target_board}.")
+    else:
+        cancelled_pos = frozenset()
+        print(f"{len(struck)} row(s) on this tab are struck through, but board "
+              f"{target_board} is not in CANCELLED_COLOR_BOARDS, so cancellations "
+              f"are NOT greyed there.")
+
     # The sheet holds every market; take only the one being switched on. Thunderbolt
     # and Savannah share a board but are separate markets, so this is by CITY, not
     # by board -- one can be proved before the other goes anywhere near it.
@@ -108,7 +130,8 @@ def main(argv=None) -> int:
           f"{len(usable(all_jobs, board_for_jobs))} usable on board "
           f"{board_for_jobs}; {len(job_index)} distinct name(s).")
 
-    groups = shifts_by_scheduler(rows, only_city=args.city, job_index=job_index)
+    groups = shifts_by_scheduler(rows, only_city=args.city, job_index=job_index,
+                                 cancelled_pos=cancelled_pos)
     jobs = groups.get(board, [])
     in_city = int((rows.get("City", "").map(norm_city) == norm_city(args.city)).sum()) \
         if "City" in rows.columns else 0
@@ -172,6 +195,24 @@ def main(argv=None) -> int:
               f"({boards[board]!r}), not to {args.city}'s own board.")
     print(f"\nBoard {board} ({args.city}) -- "
           + ("CREATING" if args.live else "PREVIEW, nothing will be sent") + ":\n")
+    # Before creating. A card already on the board whose booking has since been
+    # cancelled is SKIPPED by create_shifts -- it is "already there" -- so
+    # without this step it keeps the colour it was created with for ever.
+    try:
+        client.recolour_mismatched(
+            board, payloads, live=args.live,
+            job_names={str(j.get("jobId") or j.get("id")):
+                       (j.get("name") or j.get("title") or "")
+                       for j in all_jobs})
+    except ConnecteamError as e:
+        print("", file=sys.stderr)
+        print(f"!! could not reconcile colours: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:            # the unassigned gate, on an update
+        print("", file=sys.stderr)
+        print(f"!! REFUSED: {e}", file=sys.stderr)
+        return 1
+
     try:
         created = client.create_shifts(
             board, payloads, live=args.live,
