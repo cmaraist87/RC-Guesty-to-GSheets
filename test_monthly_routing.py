@@ -92,6 +92,29 @@ def test_parse_titles():
 
 
 def test_routing(fake, existing):
+    """Routing of rows to month tabs, for a fixed August 2026 'today'.
+
+    The date is PINNED. This test's reservations are fixed at July-September
+    2026 and it asserts that 'Septiembre 2026' gets auto-created -- which is only
+    true while September is still a future or current month. Against the real
+    clock it passed until 2026-09-30 and failed from 1 October, because sync
+    correctly declines to create a tab for a month that has already ended.
+
+    That was a test rotting, not a bug appearing, and the distinction is the
+    reason for the pin: a suite that fails with the passage of time stops being
+    read, and then hides the failure that matters. _is_finished_month is covered
+    against the real clock in test_the_current_month_is_not_treated_as_finished,
+    which is where that belongs.
+    """
+    from datetime import date as _date
+    pinned, sync._today_chicago = sync._today_chicago, lambda: _date(2026, 8, 15)
+    try:
+        _test_routing_body(fake, existing)
+    finally:
+        sync._today_chicago = pinned
+
+
+def _test_routing_body(fake, existing):
     # Two reservations: one lands in August, one spans July->September.
     reservations = [
         {"confirmationCode": "HA-AUG1", "status": "confirmed", "guest": {"fullName": "Aug Guest"},
