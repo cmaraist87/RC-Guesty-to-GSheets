@@ -48,8 +48,45 @@ marked so the two can be separated at invoice time.
 | 2026-09-26 | 0.5 | Scoped the change-timestamp column before building: confirmed a new column is carried and cannot make a row look changed again, that formatting is keyed by column NAME not position, and where it must sit to avoid the column-shift fault this sheet has had. Three decisions surfaced for the team. No code written. | ✅ |
 | 2026-09-28 | 1.25 | **[reliability]** **Watchdog built, tested and live.** A sync that runs and fails is already visible; a sync that never runs is silent, and that gap was open. It reads the completion record the sync already writes — not the sheet's 'last modified', which any crew member ticking a box would update — and fails on purpose when the deadline passes without a completed run, so the existing email carries the news. Ten tests, most of them about staying SILENT, because a monitor that cries wolf gets muted. Proved live in both directions, and a drill confirmed the email actually reaches Chris. Also confirmed the Google Cloud project the system runs in, and corrected a permissions check that reported a healthy setup as broken. | ✅ |
 
-**Total to date: 18.25 h**  
-*Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h). Unbilled so far: 1.75 h.*
+| 2026-09-29 | 0.5 | Asked the API which card colours it will accept rather than guessing, by sending one deliberately invalid colour and reading the refusal -- the rejection enumerates the palette, so the request being REFUSED is the point and nothing is ever created. Sorted the answer by hue and lightness, because a client request arrives as "dark blue" and "light green" and a bare list of hex codes does not answer that. Card colours set from it: turnovers dark blue, every other clean palest green. Red deliberately avoided -- the team colour their own day-off cards red, so a red job card reads as a day off at a glance. | ✅ |
+
+| 2026-09-30 | 0.75 | **1401 Carondelet merged.** Two Guesty listings ("1401 Caron U V1" and "1401 Caron A U V2") were producing two properties that appeared never to overlap and to hand off to each other -- one turnover shown as two unrelated jobs, twice in the window. Keyed the alias on the Guesty LISTING ID rather than the nickname, so it survives the renames this account does mid-booking, and so it cannot over-reach: 1409, 1413, 1417 and 1421 Carondelet A/B are genuinely separate flats in the same building, and a rule that stripped a trailing letter would have sent a cleaner to the wrong door. Seven tests, most of them guarding the over-reach. | ✅ |
+
+| 2026-09-30 | 0.75 | **1802 Martin Luther King brought onto the Austin board.** Creating it was refused -- Connecteam Job titles are unique account-wide and the record already existed -- so the board was added to the Job's `instanceIds` instead, which grants Austin the property and takes it from nobody. Since PUT replaces the record, the Job is read whole, only its board list changed, written back and re-read field by field. Austin now reports **0 properties missing a Job**: without this, that property's cleans produced no card at all, silently. Job creation and sharing both now require an explicit `--market-board` flag rather than riding on `--confirm`. | ✅ |
+
+| 2026-09-30 | 0.25 | Turnover colour changed to light royal blue at the client's request, replacing the dark blue set the day before. Recorded in the code what the change costs -- the dark blue separated turnovers from ordinary cleans by 142 in RGB terms and the lighter one by 90, against a green of nearly the same lightness -- so the trade-off is written down once and not re-argued. The colour test now pins the PAIRING (blue on turnovers, green on everything else) rather than the exact hex, since the hex is the client's to move and the pairing is the part that must never flip. *Reworking my own first proposal absorbed; only the client's change billed.* | ✅ |
+
+| 2026-09-30 | 0.5 | **Found that the Connecteam palette is 33 colours, not 19.** The client truncated API error bodies at 400 characters, and the rejection that enumerates the palette is longer than that -- so fourteen colours, including all three greys, were unreachable. Worse, the probe written to verify the colour constant read the same truncated string and reported "code says 19, API says 19", which looked like confirmation and was the same error twice. Chris saying the picker shows black, dark gray and light gray is what exposed it. Limit raised and the rejection now prints verbatim before anything parses it. | ✅ |
+
+| 2026-09-30 | 1.75 | **Cancellations painted light gray (#969696), Chris Test only.** Two halves. New cards: a cancellation is not in any cell's VALUE -- it is strikethrough on the row -- so the push now reads the tab's format as well as its contents, and cancelled beats turnover, because a cancelled turnover is not urgent work, it is not work. Existing cards were the harder half: the push only ever created and skipped what was already there, so a card created green stayed green after its booking was cancelled. Took four rounds of probing against a throwaway card to establish the update call, none of it documented or guessable -- v2 not v1 (v1 refuses to edit an open shift, and every card we make is one), `shiftId` not `id`, only the half of the compound id before the colon, and `openSpots` omitted. The card is written back whole with one value changed, the board re-read afterwards, and any card accepted-but-unchanged reported, since one probe returned HTTP 200 and did nothing at all. Gated to the test board by a switch separate from the card lock, so a market board cleared for cards one day does not silently inherit this too. Fourteen tests. | ✅ |
+
+| 2026-10-06 | 0.25 | Picked the integration back up: verified the nightly is green and beating the 06:45 deadline, read both boards back, and re-checked Job coverage per board. Found and fixed a test that had started failing on 1 October -- it fixed its data at September 2026 and expected a tab to be auto-created, which the sync correctly refuses for a month that has ended. A test rotting rather than a bug appearing, pinned so the suite does not fail with the passage of time and hide the failure that matters. Also found the 1401 Carondelet merge is forward-only: the alias applies when a booking is re-derived, and Property is not one of the four fields that mark a row as changed, so rows already in the sheet keep the old name and the unit still appears twice. Backfill needed. | ✅ |
+
+**Total to date: 23.0 h**
+
+*Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
+
+**Held for final billing: 6.5 h.** Chris' instruction on 2026-10-06 — account for
+these now, invoice them once the Connecteam integration is complete, as one
+closing invoice rather than a third interim one. The 15% family rate applies as
+before.
+
+| Held | Hrs |
+|------|-----|
+| 2026-09-26 timestamp-column scoping | 0.5 |
+| 2026-09-28 watchdog **[reliability]** | 1.25 |
+| 2026-09-29 colour palette established | 0.5 |
+| 2026-09-30 1401 Carondelet merge | 0.75 |
+| 2026-09-30 1802 Martin Luther King Job | 0.75 |
+| 2026-09-30 turnover colour change | 0.25 |
+| 2026-09-30 palette found to be 33, not 19 | 0.5 |
+| 2026-09-30 cancellations light gray | 1.75 |
+| 2026-10-06 state review, rotted test, Carondelet finding | 0.25 |
+
+Still to come before that invoice closes: the rolling push window, reconciling the
+board against the sheet (a vanished booking currently leaves its card for ever),
+the moved-booking case, automating the push after the nightly sync, the Carondelet
+backfill, and the two larger markets' Jobs.
 
 > Phase 1 work continues alongside and is **not** billed here.
 
@@ -75,15 +112,20 @@ not only what is spent.
 
 - ~~Map property → Connecteam `jobId`~~ — **done 2026-09-21** (`connecteam_jobs.py`; highest-version rule)
 - ~~Decide whether a card with no Job attached is acceptable~~ — **settled**: no Job, no card; the property is reported for the team to create
-- **Team to create 3 Austin Jobs**: 1802 Martin Luther King, 4807 Prock B, 4807 Prock C (only the first has an October clean)
-- Clean up ~6 `PROBE` shifts left on the test board, dated 2027-06-01 — needs a delete path, which does not exist yet
-- ~~Decide where the first market write happens~~ — **done**: Austin, live, on Chris' call
-- **Delete path** — needed to clear the ~7 `PROBE` shifts and the 37 old-design cards on the test board, and for the job lifecycle
+- ~~Austin Jobs missing~~ — **done 2026-09-30**: 1802 Martin Luther King shared onto the Austin board; Austin now reports **0 properties missing a Job**
+- ~~Delete path~~ — **done 2026-09-21**; used since to clear the `PROBE` shifts, the 37 old-design cards, and 46 cards in the old turnover colour
+- ~~Decide where the first market write happens~~ — **done**: Austin, on Chris' call
+- ~~Card colours~~ — **done 2026-09-30**: turnover light royal blue, clean palest green, cancelled light gray
+- ~~Update a card already on the board~~ — **done 2026-09-30**: `PUT /scheduler/v2/.../shifts`, established by probing; used for the cancelled colour
 - Verify how the card renders on a crew phone now the title is Clean/Turnover and the place is the Job
-- Job lifecycle: update and delete when a booking moves or cancels
-- ~~First write to a **market** board~~ — **done 2026-09-21**, Austin October, 38 cards
-- Job lifecycle: update and delete a pushed job when the booking moves or cancels
-- Link each sheet row to its Connecteam job so a later run can find it again
-- Decide the rolling push window **(now blocking the first live push)**
+- **Rolling push window** — nothing yet decides which dates get pushed; every push names a month by hand. *Blocks automation.*
+- **Reconcile the board against the sheet** — the push only creates and recolours. A booking that VANISHES from the sheet leaves its card on the board for ever. *The one gap that makes a crew board unsafe.*
+- **A moved booking** — a changed checkout time creates a second card and orphans the first, because cards are matched on (Job, title, start time)
+- Link each sheet row to its card, so a later run can find it without re-deriving the match
 - Automate the push after the daily sync
-- Extend from the first city to all five markets
+- 1401 Carondelet backfill — the merge is forward-only; rows already in the sheet keep the old name
+- Should a cancelled card's TITLE say so, not only its colour (it still reads "Clean")
+- Same-slot collisions — a cancelled booking and its replacement at the same property, date and time produce two cards, one gray and one green
+- 3 legacy cards on Chris Test from 13 September — assigned to somebody, so the delete guard refuses them; they need unassigning in the UI first
+- Jobs still missing: 22 properties on the Savannah/Thunderbolt board, 27 on the New Orleans/Bay St. Louis board
+- Extend from Austin to the other four markets — Savannah/Thunderbolt, then New Orleans/Bay St. Louis
