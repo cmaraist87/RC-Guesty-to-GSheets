@@ -259,6 +259,26 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: |
+          # The workflow file and the CODE come from different places, and they
+          # drift. GitHub takes this file from the dispatch ref, but the checkout
+          # above pins `live` whenever as_scheduled is set -- so a step added to
+          # main today can run against code tagged weeks ago.
+          #
+          # That is not hypothetical: when this step was written, `live` was 62
+          # commits behind, and running it there would have pushed cards in the
+          # OLD turnover colour with no window and no reconcile, on a board Chris
+          # was about to show the team.
+          #
+          # So the step asks the checked-out code whether it is the code this step
+          # was written for, and stands down if it is not. --days exists only in
+          # the version that reconciles; its absence means `live` has not caught up.
+          if ! python connecteam_push.py --help 2>/dev/null | grep -q -- "--days"; then
+            echo "::warning::Connecteam push SKIPPED: the checked-out code predates"
+            echo "::warning::the rolling window (no --days). Move the \`live\` tag to"
+            echo "::warning::ship it: git tag -f live <commit> && git push -f origin live"
+            echo "Checked-out ref does not support the rolling window; nothing sent."
+            exit 0
+          fi
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "Sheet run was a DRY RUN, so the cards are previewed only."
             python -u connecteam_push.py --city Austin --test
