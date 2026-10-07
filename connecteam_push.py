@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError
 from connecteam_cards import (booking_activity, cards_for_tab, plan,
-                              read_map, write_map)
+                              read_map, write_map, write_snapshot)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
                             CITY_SCHEDULERS, STANDARD_COLOR, STANDARD_TITLE,
@@ -272,6 +272,26 @@ def main(argv=None) -> int:
         our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
         our_colors=(STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR),
         stale_color=CANCELLED_COLOR if grey_cancellations else None)
+
+    # BEFORE anything is written: the board exactly as it is. Held whole rather
+    # than summarised, because a summary cannot be restored from, and the point
+    # is to answer "what did it look like before?" at 6am without reading a log
+    # and squinting. card_restore reads it back.
+    #
+    # Only on a live run, and only when there is actually something to do -- a
+    # run that changes nothing has nothing to undo, and a snapshot per no-op
+    # would bury the ones that matter.
+    if args.live and (updates or creates or greys):
+        taken = write_snapshot(
+            store, board, on_board,
+            {"window": f"{first}..{last}", "city": args.city,
+             "planned": {"move_or_recolour": len(updates),
+                         "create": len(creates), "grey": len(greys)}})
+        if taken:
+            print(f"   before-snapshot: {len(on_board)} card(s) saved as {taken}")
+        else:
+            print("   !! NO before-snapshot was stored. Undo would mean reading "
+                  "the changes out of this log by hand.")
 
     # Move and recolour first. A booking that changed date or time keeps ITS card
     # -- Chris, 2026-10-06 -- so this is an update, not a delete and a create, and

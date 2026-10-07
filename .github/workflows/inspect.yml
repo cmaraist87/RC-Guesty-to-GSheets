@@ -35,6 +35,7 @@ on:
           - board_peek       # every card on one board, by id (read-only)
           - shift_fields     # our card beside the team's, field by field
           - shift_delete     # DELETES cards from one board (needs write)
+          - card_restore     # UNDO a push from its before-snapshot (needs write)
           - why_missing       # why is one reservation not on the sheet?
           - reservation_info  # everything known about one or more reservations
           - duplicates        # rows sharing a (Property, Date)
@@ -74,6 +75,11 @@ on:
           - Bay St. Louis
           - Savannah
           - Thunderbolt
+      days:
+        description: "connecteam: rolling window depth in days (blank = 45). Use a small number for a cautious first push."
+        required: false
+        default: ""
+        type: string
       month:
         description: "connecteam month (YYYY-MM); strike_probe: tab name e.g. Octubre 2026"
         required: false
@@ -148,6 +154,11 @@ jobs:
             connecteam)
               MONTH=""
               if [ -n "${{ inputs.month }}" ]; then MONTH="--month ${{ inputs.month }}"; fi
+              # A deliberately small first window, without a code edit. 45 days
+              # is ~67 Austin cards; 3 days is about five, which can be read at a
+              # glance and removed with one command.
+              DAYS=""
+              if [ -n "${{ inputs.days }}" ]; then DAYS="--days ${{ inputs.days }}"; fi
               # Chris Test or nothing. Cards go to a market board only once Chris
               # has signed off, and that sign-off is a code change, not an input
               # here: connecteam_push refuses --live without --test.
@@ -159,15 +170,15 @@ jobs:
               # board, and the script would refuse it even if there were.
               if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
                 echo "::warning::Writing to the TEST board (Chris Test)."
-                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test --live
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS --test --live
               elif [ "${{ inputs.connecteam_write }}" = "preview-test-board" ]; then
                 # Preview against Chris Test rather than the market board. The
                 # two resolve DIFFERENT Jobs -- Austin owns 35, Chris Test 3 --
                 # so previewing the market board says nothing about what would
                 # land on the test one.
-                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH --test
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS --test
               else
-                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
             color_palette) python -u color_palette.py ;;
@@ -209,6 +220,14 @@ jobs:
               CREATE=""
               if [ "${{ inputs.write }}" = "true" ]; then CREATE="--create"; fi
               python -u job_fields.py $CREATE ;;
+            card_restore)
+              # `property` is the board; `code` optionally names an older
+              # snapshot instead of this board's latest.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              SNAP=""
+              if [ -n "${{ inputs.code }}" ]; then SNAP="--snapshot ${{ inputs.code }}"; fi
+              python -u card_restore.py --board "${{ inputs.property }}" $SNAP $CONFIRM ;;
             shift_update) python -u shift_update_probe.py ;;
             shift_delete)
               # `property` is the board id; from/to bound the window;

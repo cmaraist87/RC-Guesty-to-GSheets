@@ -364,3 +364,73 @@ def write_map(store, board: str, mapping: dict, generation: int) -> bool:
               f"correct.)")
         return False
     return True
+
+
+# ----------------------------------------------- a snapshot, so undo is cheap
+
+SNAPSHOT_DIR = "connecteam/snapshots"
+
+
+def snapshot_names(board: str, when) -> tuple:
+    """(dated archive, latest pointer) for one board's before-snapshot.
+
+    Two objects, not one. The dated copy is the record -- never overwritten, so a
+    run from three days ago is still recoverable. The `latest` copy is what an
+    undo reaches for by default, because the thing somebody wants to undo at 6am
+    is almost always the last thing that happened.
+
+    Two rather than a listing because the object store here does read and write
+    and nothing else, and adding a list operation to it to support a convenience
+    is the wrong trade.
+    """
+    stamp = when.strftime("%Y%m%d-%H%M%S")
+    return (f"{SNAPSHOT_DIR}/{board}-{stamp}.json",
+            f"{SNAPSHOT_DIR}/{board}-latest.json")
+
+
+def write_snapshot(store, board: str, shifts, meta: dict, when=None) -> str:
+    """Record the board EXACTLY as it is, before anything is written to it.
+
+    Returns the dated object's name, or "" if it could not be stored.
+
+    Called before the first write of a live run, never on a preview. The whole
+    point is to be able to answer "what did it look like before?" without reading
+    a log and squinting, so it holds the cards whole rather than a summary -- a
+    summary cannot be restored from.
+    """
+    import json
+    from datetime import datetime, timezone
+    if store is None:
+        return ""
+    when = when or datetime.now(timezone.utc)
+    dated, latest = snapshot_names(board, when)
+    body = {"board": str(board), "taken": when.isoformat(),
+            "count": len(shifts), **meta, "shifts": list(shifts)}
+    payload = json.dumps(body, indent=1, sort_keys=True, default=str).encode("utf-8")
+    try:
+        store.write(dated, payload, if_generation_match=0)
+    except Exception as e:  # noqa: BLE001 - see below; this must not block a write
+        print(f"   (could not store the before-snapshot: {e})")
+        return ""
+    try:
+        _old, gen = store.read(latest)
+        store.write(latest, payload, if_generation_match=gen)
+    except Exception as e:  # noqa: BLE001
+        print(f"   (snapshot stored as {dated} but the 'latest' pointer did not "
+              f"move: {e})")
+    return dated
+
+
+def read_snapshot(store, board: str, name: str = ""):
+    """The snapshot to undo from. `name` defaults to this board's latest."""
+    import json
+    if store is None:
+        return None
+    want = name or snapshot_names(board, __import__("datetime").datetime.now())[1]
+    raw, _gen = store.read(want)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
