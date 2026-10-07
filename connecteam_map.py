@@ -137,6 +137,41 @@ CANCELLED_COLOR = "#969696"    # light gray: the booking was cancelled
 # this set is where it gets made -- not something that arrives with the first.
 CANCELLED_COLOR_BOARDS = frozenset({TEST_SCHEDULER})
 
+# How far ahead cards exist. Chris' call on 2026-10-06: a ROLLING 45 days from
+# today, not a calendar range.
+#
+# Rolling, because a calendar window shrinks to nothing at month-end -- on the
+# 30th a "current and next month" horizon is one day deep for the month the
+# crews are about to work. A rolling window is always the same depth.
+#
+# It is also the window the board is RECONCILED over, and those two have to be
+# the same number. A card outside it is left completely alone: not created, not
+# repainted, not greyed. Reconciling wider than we push would grey every card
+# from an older run; pushing wider than we reconcile would create cards nothing
+# ever corrects again.
+WINDOW_DAYS = 45
+
+
+def window_bounds(today, days: int = WINDOW_DAYS):
+    """(first date, last date) inclusive, for a rolling window from `today`."""
+    from datetime import timedelta
+    return today, today + timedelta(days=days)
+
+
+def months_in_window(first, last) -> list:
+    """Every (year, month) the window touches, in order.
+
+    A 45-day window spans two month tabs and sometimes three, so the push reads
+    several and cannot assume one. Worked out by walking months rather than by
+    arithmetic on day counts, because month lengths differ and a 31st does not
+    survive being moved to a 30-day month.
+    """
+    out, y, m = [], first.year, first.month
+    while (y, m) <= (last.year, last.month):
+        out.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
 _TIME_FORMATS = ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S")
 
 

@@ -18,12 +18,16 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
-                            CITY_SCHEDULERS, TEST_SCHEDULER, scheduler_for,
-                            shifts_by_scheduler)
+                            CITY_SCHEDULERS, STANDARD_TITLE, TEST_SCHEDULER,
+                            TURNOVER_TITLE, WINDOW_DAYS, months_in_window,
+                            scheduler_for, shifts_by_scheduler, timezone_for,
+                            window_bounds)
 from sheet_merge import norm_city
 from sheets_client import (month_worksheets, open_spreadsheet,
                            read_as_dataframe, read_row_marks)
@@ -36,7 +40,11 @@ def main(argv=None) -> int:
     ap.add_argument("--city", required=True,
                     help="One market at a time: " + ", ".join(sorted(CITY_SCHEDULERS)))
     ap.add_argument("--month", default=None, metavar="YYYY-MM",
-                    help="Which month tab to read. Defaults to the current month.")
+                    help="Pin to ONE calendar month instead of the rolling "
+                         "window. For a backfill or a demo, by hand.")
+    ap.add_argument("--days", type=int, default=WINDOW_DAYS, metavar="N",
+                    help=f"Rolling window depth in days (default {WINDOW_DAYS}). "
+                         f"Also the slice of the board that gets reconciled.")
     ap.add_argument("--test", action="store_true",
                     help="Send to the test board instead of the city's real one. "
                          "The board has no crew, so nothing reaches a phone.")
@@ -76,51 +84,42 @@ def main(argv=None) -> int:
         print("ERROR: CONNECTEAM_API_KEY is not set.", file=sys.stderr)
         return 2
 
-    ym = args.month or _today_chicago().strftime("%Y-%m")
     cfg = load_config()
     if not cfg["sheet_id"]:
         print("ERROR: SHEET_ID is not set.", file=sys.stderr)
         return 2
 
+    board_for_jobs = TEST_SCHEDULER if args.test else board
+    target_board = board_for_jobs
+
+    # THE WINDOW. Rolling 45 days from today by default; --month pins a single
+    # calendar month instead, which is how a one-off backfill or a demo push is
+    # done by hand.
+    #
+    # The same bounds are used three times over and must not diverge: which tabs
+    # are read, which cards are created, and which slice of the board is
+    # reconciled. Reconciling wider than we push would grey every card an earlier
+    # run left outside the window; pushing wider than we reconcile would create
+    # cards that nothing ever corrects again.
+    today = _today_chicago()
+    if args.month:
+        y, m = int(args.month[:4]), int(args.month[5:7])
+        first = date(y, m, 1)
+        last = date(y + (m == 12), 1 if m == 12 else m + 1, 1) - timedelta(days=1)
+        print(f"WINDOW: the whole of {args.month} ({first} to {last}), by --month.")
+    else:
+        first, last = window_bounds(today, args.days)
+        print(f"WINDOW: rolling {args.days} days, {first} to {last} "
+              f"(today is {today}).")
+
+    tz = ZoneInfo(timezone_for(args.city))
+    lo = int(datetime.combine(first, time(0, 0), tzinfo=tz).timestamp())
+    hi = int(datetime.combine(last, time(23, 59, 59), tzinfo=tz).timestamp())
+
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
     tabs = month_worksheets(ss)
-    ws = tabs.get((int(ym[:4]), int(ym[5:7])))
-    if ws is None:
-        print(f"ERROR: no tab for {ym} (expected '{_spanish_tab(ym)}').", file=sys.stderr)
-        return 2
 
-    rows, _ = read_as_dataframe(ws)
-    print(f"Read {len(rows)} row(s) from '{ws.title}'.")
-
-    # A SECOND read of the same tab, for its FORMAT. A cancellation is not in
-    # any cell's value -- it is strikethrough on the row -- so the frame above
-    # cannot answer "was this cancelled?" and never could. Positions come back
-    # 0-based over data rows, which is the frame's own index.
-    #
-    # Gated to the boards in CANCELLED_COLOR_BOARDS. Chris asked for grey
-    # cancellations on Chris Test "for now", and a market board getting cards one
-    # day must not silently inherit this as well.
-    target_board = TEST_SCHEDULER if args.test else board
-    struck, _hl, _acc = read_row_marks(ws)
-    if target_board in CANCELLED_COLOR_BOARDS:
-        cancelled_pos = struck
-        print(f"{len(struck)} row(s) on this tab are struck through (cancelled); "
-              f"their cards go {CANCELLED_COLOR} on board {target_board}.")
-    else:
-        cancelled_pos = frozenset()
-        print(f"{len(struck)} row(s) on this tab are struck through, but board "
-              f"{target_board} is not in CANCELLED_COLOR_BOARDS, so cancellations "
-              f"are NOT greyed there.")
-
-    # The sheet holds every market; take only the one being switched on. Thunderbolt
-    # and Savannah share a board but are separate markets, so this is by CITY, not
-    # by board -- one can be proved before the other goes anywhere near it.
-    # The board's Jobs, so the card can point the property at one. Loaded BEFORE
-    # the shifts are built, because a property with no Job produces no card at
-    # all -- the property is no longer in the title, so a card without a Job
-    # would name no place whatsoever.
     client = ConnecteamClient(key)
-    board_for_jobs = TEST_SCHEDULER if args.test else board
     all_jobs, how = client.list_jobs(board_for_jobs)
     # Scoped to the board being written to, and with the soft-deleted dropped.
     # The account-wide list is a superset three times over: 506 of 1429 are
@@ -130,9 +129,42 @@ def main(argv=None) -> int:
           f"{len(usable(all_jobs, board_for_jobs))} usable on board "
           f"{board_for_jobs}; {len(job_index)} distinct name(s).")
 
-    groups = shifts_by_scheduler(rows, only_city=args.city, job_index=job_index,
-                                 cancelled_pos=cancelled_pos)
-    jobs = groups.get(board, [])
+    grey_cancellations = target_board in CANCELLED_COLOR_BOARDS
+    if grey_cancellations:
+        print(f"Cancelled bookings go {CANCELLED_COLOR} on board {target_board}.")
+    else:
+        print(f"Board {target_board} is not in CANCELLED_COLOR_BOARDS, so "
+              f"cancellations are NOT greyed there.")
+
+    # One tab at a time, because strikethrough positions are per worksheet. A
+    # concatenated frame would need its indices remapped, and an off-by-one there
+    # paints the wrong booking grey while leaving a real cancellation looking
+    # live. Building per tab and merging the PAYLOADS avoids the question.
+    jobs = []
+    missing = []
+    for (y, m) in months_in_window(first, last):
+        ws = tabs.get((y, m))
+        if ws is None:
+            missing.append(f"{y}-{m:02d} ('{_spanish_tab(f'{y}-{m:02d}')}')")
+            continue
+        rows, _ = read_as_dataframe(ws)
+        # A SECOND read of the same tab, for its FORMAT. A cancellation is not in
+        # any cell's value -- it is strikethrough on the row -- so the frame
+        # above cannot answer "was this cancelled?" and never could.
+        struck, _hl, _acc = read_row_marks(ws)
+        cancelled_pos = struck if grey_cancellations else frozenset()
+        groups = shifts_by_scheduler(rows, only_city=args.city,
+                                     job_index=job_index,
+                                     cancelled_pos=cancelled_pos)
+        here = groups.get(board, [])
+        inside = [(r, p) for r, p in here if lo <= int(p["startTime"]) <= hi]
+        jobs.extend(inside)
+        print(f"  '{ws.title}': {len(rows)} row(s), {len(struck)} struck, "
+              f"{len(here)} {args.city} card(s), {len(inside)} inside the window.")
+    if missing:
+        print(f"  no tab for {', '.join(missing)} -- nothing read for those "
+              f"month(s). A month with no tab yet is normal near the window's "
+              f"far edge.")
     in_city = int((rows.get("City", "").map(norm_city) == norm_city(args.city)).sum()) \
         if "City" in rows.columns else 0
     print(f"{in_city} row(s) are {args.city}; {len(jobs)} of them are cleans "
@@ -195,12 +227,20 @@ def main(argv=None) -> int:
               f"({boards[board]!r}), not to {args.city}'s own board.")
     print(f"\nBoard {board} ({args.city}) -- "
           + ("CREATING" if args.live else "PREVIEW, nothing will be sent") + ":\n")
-    # Before creating. A card already on the board whose booking has since been
-    # cancelled is SKIPPED by create_shifts -- it is "already there" -- so
-    # without this step it keeps the colour it was created with for ever.
+    # Before creating. Two things create_shifts cannot do: repaint a card whose
+    # booking was cancelled after it was made (it is "already there", so it is
+    # skipped), and notice a card the sheet no longer wants at all.
+    #
+    # A VANISHED booking is greyed, not deleted -- Chris' call on 2026-10-06. It
+    # leaves a visible trace that something changed instead of work silently
+    # disappearing off the board. Only cards titled as ours are eligible: the
+    # team make their own cards on these boards, carrying the property in the
+    # title, and repainting one of those would be us editing their schedule.
     try:
-        client.recolour_mismatched(
-            board, payloads, live=args.live,
+        client.reconcile_colours(
+            board, payloads, lo, hi, live=args.live,
+            stale_color=CANCELLED_COLOR if grey_cancellations else None,
+            our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
             job_names={str(j.get("jobId") or j.get("id")):
                        (j.get("name") or j.get("title") or "")
                        for j in all_jobs})

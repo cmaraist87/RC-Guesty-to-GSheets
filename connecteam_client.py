@@ -282,55 +282,72 @@ class ConnecteamClient:
         return self._request(
             "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts", body=[body])
 
-    def recolour_mismatched(self, scheduler_id: str, shifts: list[dict],
-                            live: bool = False, job_names=None) -> list[tuple]:
-        """Repaint cards ALREADY on the board whose colour has since changed.
+    def reconcile_colours(self, scheduler_id: str, wanted: list[dict],
+                          lo: int, hi: int, live: bool = False, job_names=None,
+                          stale_color: str | None = None,
+                          our_titles=()) -> list[tuple]:
+        """Repaint the board so it matches the sheet. [(shift, was, now)] repainted.
 
-        Returns [(shift, was, now)] for every card repainted (or that would be).
+        Two things create_shifts structurally cannot do, and they are the same
+        operation once you look at them:
 
-        This is the half create_shifts structurally cannot do. It compares what
-        it wants against the board and SKIPS the matches, which is right for not
-        duplicating work and wrong for a card whose booking was cancelled after
-        it was created: the card is "already there", so it is skipped, so it
-        stays the colour it was born.
+          * a card ALREADY on the board whose colour has since changed -- its
+            booking was cancelled after the card was made. create_shifts sees it
+            as "already there" and skips it, so it keeps the colour it was born.
+          * a card on the board that the sheet no longer wants at all. The
+            booking did not get struck, it VANISHED. Nothing ever looked for
+            these, so they sat on the board for ever.
 
-        Matched on _shift_key -- (jobId, title, startTime) -- the same key
-        create_shifts skips on, so the two agree by construction about which
-        desired card is which existing card.
+        `lo`/`hi` bound the reconcile and are passed in rather than derived from
+        `wanted`: they must be the push window exactly. Derived from `wanted`
+        they would collapse to nothing when the sheet is empty for a stretch, and
+        every card in the gap would survive as a ghost.
+
+        `our_titles` is the safety rail on the stale half. Only cards whose title
+        is one of ours can be greyed. The team create their own cards on these
+        boards, carrying the property in the title, and repainting one of those
+        would be us editing their schedule.
         """
-        if not shifts:
-            return []
-        lo = min(int(s["startTime"]) for s in shifts)
-        hi = max(int(s["endTime"]) for s in shifts)
-        on_board = {}
+        on_board: dict = {}
         for existing in self.existing_shifts(scheduler_id, lo, hi):
             on_board.setdefault(_shift_key(existing), existing)
+        want_by_key = {_shift_key(w): w for w in wanted}
 
         todo = []
-        for want in shifts:
-            existing = on_board.get(_shift_key(want))
-            if existing is None:
-                continue                       # not there yet; create_shifts' job
+        for key, existing in on_board.items():
             was = str(existing.get("color") or "")
-            now = str(want.get("color") or "")
+            want = want_by_key.get(key)
+            if want is not None:
+                now = str(want.get("color") or "")
+            elif stale_color and str(existing.get("title") or "") in our_titles:
+                # The sheet no longer has this booking at all.
+                now = stale_color
+            else:
+                continue                   # not ours, or nothing to say about it
             if not now or was.upper() == now.upper():
                 continue
             todo.append((existing, was, now))
 
+        stale_n = sum(1 for e, _w, _n in todo if _shift_key(e) not in want_by_key)
         if not todo:
-            print(f"   scheduler {scheduler_id}: every card already on the board "
-                  f"is the right colour.")
+            print(f"   scheduler {scheduler_id}: every card in the window is "
+                  f"already the right colour.")
             return []
 
+        verb = "WOULD repaint" if not live else "repainting"
+        print(f"   scheduler {scheduler_id}: {verb} {len(todo)} card(s) "
+              f"({stale_n} no longer in the sheet at all)"
+              + ("." if live else ". Nothing was sent."))
         if not live:
-            print(f"   scheduler {scheduler_id}: WOULD repaint {len(todo)} card(s). "
-                  f"Nothing was sent.")
             for existing, was, now in todo:
-                print(f"     {was} -> {now}   {_fmt(existing, job_names)}")
+                tag = "GONE " if _shift_key(existing) not in want_by_key else "     "
+                print(f"     {tag}{was} -> {now}   "
+                      f"{_fmt(dict(existing, color=now), job_names)}")
             return []
 
         done = []
         for existing, was, now in todo:
+            tag = "GONE " if _shift_key(existing) not in want_by_key else "     "
             try:
                 self.recolour_shift(scheduler_id, existing, now)
             except ConnecteamError as e:
@@ -338,11 +355,12 @@ class ConnecteamClient:
                       f"{str(e)[:160]}")
                 continue
             done.append((existing, was, now))
-            print(f"     {was} -> {now}   {_fmt(existing, job_names)}")
+            print(f"     {tag}{was} -> {now}   "
+                  f"{_fmt(dict(existing, color=now), job_names)}")
 
         # Read the board back. An accepted request is not a changed card -- the
         # Sheets half of this project lost days to exactly that distinction, and
-        # the POST attempt in shift_update_probe returned 200 and did nothing.
+        # a POST in shift_update_probe returned 200 and did nothing at all.
         after = {}
         for s2 in self.existing_shifts(scheduler_id, lo, hi):
             after.setdefault(_shift_key(s2), s2)
