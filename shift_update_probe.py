@@ -130,6 +130,21 @@ def attempts(board: str, sid: str, body: dict):
         ("PUT   v2 id BEFORE the colon", "PUT",
          f"/scheduler/v2/schedulers/{board}/shifts",
          [dict(no_spots, shiftId=sid.split(":", 1)[0])]),
+        # MINIMAL body. If v2 merges rather than replaces, this is the right call
+        # outright: nothing the team owns can be dropped, because nothing the team
+        # owns is sent. Worth knowing before adding fields to an exclusion list
+        # one rejection at a time.
+        ("PUT   v2 shiftId + colour only", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts",
+         [{"shiftId": sid.split(":", 1)[0], "color": colour_only["color"]}]),
+        # Whole card minus the fields the server owns or derives.
+        ("PUT   v2 minus server fields", "PUT",
+         f"/scheduler/v2/schedulers/{board}/shifts",
+         [{k: v for k, v in dict(no_spots,
+                                 shiftId=sid.split(":", 1)[0]).items()
+           if k not in ("locationData", "address", "gps", "latitude",
+                        "longitude", "createdBy", "creationTime", "updateTime",
+                        "statuses", "isReferencedToJob", "shiftLayers")}]),
         ("PUT   v2 id AFTER the colon", "PUT",
          f"/scheduler/v2/schedulers/{board}/shifts",
          [dict(no_spots, shiftId=sid.split(":", 1)[-1])]),
@@ -149,7 +164,19 @@ def main(argv=None) -> int:
 
     client = ConnecteamClient(check_api_key(os.environ.get("CONNECTEAM_API_KEY", "")))
 
+    # WITH a jobId. Without one the probe card carries no locationData, and
+    # locationData is exactly what the real failure is about: on 2026-10-07 every
+    # update against a real card was refused with "can't set locat..." while this
+    # probe reported success, because a card with no Job has no location to set.
+    # A probe that cannot reproduce the failure is worse than no probe.
+    jobs_here = usable(client.list_jobs(TEST_SCHEDULER)[0], TEST_SCHEDULER)
+    probe_job = str((jobs_here[0].get("jobId") or jobs_here[0].get("id"))
+                    if jobs_here else "")
+    print(f"  attaching Job {probe_job[:12]} so the card has a location, like a "
+          f"real one")
     base = {
+        "jobId": probe_job,
+        "notes": [],
         "startTime": int(WHEN.timestamp()),
         "endTime": int((WHEN + timedelta(minutes=15)).timestamp()),
         "timezone": TZ,
