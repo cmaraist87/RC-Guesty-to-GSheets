@@ -37,6 +37,7 @@ on:
           - shift_fields     # our card beside the team's, field by field
           - shift_delete     # DELETES cards from one board (needs write)
           - card_restore     # UNDO a push from its before-snapshot (needs write)
+          - card_paint       # set a TEST-board card's colour, to stage a proof
           - why_missing       # why is one reservation not on the sheet?
           - reservation_info  # everything known about one or more reservations
           - duplicates        # rows sharing a (Property, Date)
@@ -241,6 +242,12 @@ jobs:
               SNAP=""
               if [ -n "${{ inputs.code }}" ]; then SNAP="--snapshot ${{ inputs.code }}"; fi
               python -u card_restore.py --board "${{ inputs.property }}" $SNAP $CONFIRM ;;
+            card_paint)
+              # `code` is the colour; from/to the window; `to_prop` unused.
+              # Test board only -- the tool has no --board at all.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              python -u card_paint.py --from "${{ inputs.from }}" --to "${{ inputs.to }}" --color "${{ inputs.code }}" $CONFIRM ;;
             shift_update) python -u shift_update_probe.py ;;
             shift_delete)
               # `property` is the board id; from/to bound the window;
