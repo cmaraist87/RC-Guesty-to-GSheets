@@ -191,8 +191,16 @@ def slot_key(shift) -> tuple:
     matched on the slot it occupies -- which is what the old code matched on -- and
     from then on it is in the map like any other.
     """
-    return (str(shift.get("jobId") or ""), str(shift.get("title") or ""),
-            int(shift.get("startTime") or 0))
+    # NO title. Title is one of the things a booking can CHANGE -- a clean
+    # becoming a turnover changes it -- so keying adoption on it means such a
+    # card cannot be recognised, gets greyed as "no booking claims this", and a
+    # second card is created beside it. That happened to 6504 Porter A on
+    # 31 December, seen on the test board on 2026-10-07.
+    #
+    # (jobId, startTime) is the stable pair: the property and the instant. The
+    # create-skip key in connecteam_client keeps the title, deliberately -- there,
+    # a Clean and a Turnover at one slot really are two different cards.
+    return (str(shift.get("jobId") or ""), int(shift.get("startTime") or 0))
 
 
 def ours(shift, our_titles=(), our_colors=()) -> bool:
