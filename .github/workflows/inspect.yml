@@ -158,6 +158,10 @@ jobs:
               # 1417 and 1421 Caron A/B are real separate flats in the same
               # building and must not be merged with 1401.
               if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
+              # `code` = "clear" repairs the 2026-10-07 off-by-one instead:
+              # puts FALSE back in the `assigned` checkboxes that got a property
+              # name written into them.
+              if [ "${{ inputs.code }}" = "clear" ]; then ARGS="$ARGS --clear-misplaced"; fi
               python -u carondelet_merge.py $ARGS ;;
             date_rows)   python -u date_rows.py --date "${{ inputs.date }}" ;;
             connecteam)

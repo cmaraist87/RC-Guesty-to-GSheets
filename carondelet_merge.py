@@ -170,6 +170,54 @@ def write_fixes(ws, hits, prop_col: int) -> int:
     return written
 
 
+def find_misplaced(ws):
+    """Cells in the column LEFT of Property holding a name that belongs in it.
+
+    The footprint of the off-by-one on 2026-10-07: 54 writes landed one column
+    short, in `assigned`, which is a CHECKBOX the team ticks. Those cells now
+    hold "1401 Carondelet" where only TRUE or FALSE belongs.
+
+    Self-identifying on purpose. It looks for the exact strings this tool writes,
+    in exactly the column the bug wrote them to, so it cannot touch a cell the
+    bug did not touch -- and it finds them without being told which rows.
+    """
+    frame, _header = read_as_dataframe(ws)
+    if not len(frame) or "Property" not in frame.columns:
+        return [], 0
+    k = list(frame.columns).index("Property")
+    if k == 0:
+        return [], 0
+    left = frame.columns[k - 1]
+    targets = set(MERGE_BY_NAME.values()) | set(LISTING_ALIASES.values())
+    hits = []
+    for i, r in frame.iterrows():
+        val = str(r.iloc[k - 1]).strip()
+        if val in targets:
+            hits.append((i + 2, str(r.get("Date", ""))[:10], str(left), val,
+                         str(r.get("Confirmation Code", "")).strip().upper()))
+    return hits, k - 1
+
+
+def clear_misplaced(ws, hits, col_idx: int) -> int:
+    """Put FALSE back in those cells, as a BOOLEAN, not the text "FALSE".
+
+    USER_ENTERED, and a real Python False, because the column carries a checkbox.
+    RAW with the string "FALSE" would leave text in a tickbox and look fixed
+    while still being wrong -- which is the same mistake twice.
+    """
+    col = _col_letter(col_idx + 1)
+    data = [{"range": f"{col}{grid}", "values": [[False]]}
+            for grid, _d, _c, _v, _code in hits]
+    written = 0
+    for start in range(0, len(data), MAX_PER_BATCH):
+        chunk = data[start:start + MAX_PER_BATCH]
+        with_retry(
+            lambda c=chunk: ws.batch_update(c, value_input_option="USER_ENTERED"),
+            f"restoring {len(chunk)} checkbox(es) on '{ws.title}'")
+        written += len(chunk)
+    return written
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -178,6 +226,10 @@ def main(argv=None) -> int:
                     help="Include months that have already ended.")
     ap.add_argument("--fix", action="store_true",
                     help="WRITE the merged name (default: report only).")
+    ap.add_argument("--clear-misplaced", action="store_true",
+                    help="Repair the 2026-10-07 off-by-one: put FALSE back in "
+                         "the `assigned` checkbox cells that got a property "
+                         "name written into them.")
     args = ap.parse_args(argv)
 
     if not LISTING_ALIASES:
@@ -208,6 +260,32 @@ def main(argv=None) -> int:
 
     today = _today_chicago()
     floor = (today.year, today.month)
+
+    if args.clear_misplaced:
+        found = cleared = 0
+        for (y, m), ws in sorted(tabs.items()):
+            hits, col_idx = find_misplaced(ws)
+            if not hits:
+                continue
+            found += len(hits)
+            print(f"'{ws.title}': {len(hits)} misplaced cell(s) in "
+                  f"{_col_letter(col_idx + 1)} ({hits[0][2]!r})")
+            for grid, date, _c, val, code in hits:
+                print(f"   row {grid:<5} {date}  {val!r} -> FALSE  [{code}]")
+            if args.fix:
+                cleared += clear_misplaced(ws, hits, col_idx)
+                print(f"   restored {len(hits)} checkbox(es).")
+        print("")
+        if not found:
+            print("Nothing misplaced. That column holds no property names.")
+        elif args.fix:
+            print(f"Restored {cleared} of {found} cell(s) to FALSE.")
+            print("Re-run without --fix to confirm none are left.")
+        else:
+            print(f"{found} cell(s) would be restored to FALSE. --fix not given; "
+                  f"nothing was written.")
+        return 0
+
     total, fixed, orphans = 0, 0, 0
     for (y, m), ws in sorted(tabs.items()):
         if not args.all and (y, m) < floor:
