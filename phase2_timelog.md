@@ -62,11 +62,21 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-06 | 0.25 | Picked the integration back up: verified the nightly is green and beating the 06:45 deadline, read both boards back, and re-checked Job coverage per board. Found and fixed a test that had started failing on 1 October -- it fixed its data at September 2026 and expected a tab to be auto-created, which the sync correctly refuses for a month that has ended. A test rotting rather than a bug appearing, pinned so the suite does not fail with the passage of time and hide the failure that matters. Also found the 1401 Carondelet merge is forward-only: the alias applies when a booking is re-derived, and Property is not one of the four fields that mark a row as changed, so rows already in the sheet keep the old name and the unit still appears twice. Backfill needed. | ✅ |
 
-**Total to date: 23.0 h**
+| 2026-10-07 | 2.5 | **Stage 1: the board now reconciles against the sheet instead of only being added to.** Rolling 45-day window (a calendar window is one day deep on the 30th for the month the crews are about to work), spanning two month tabs and sometimes three, read one at a time because strikethrough positions are per worksheet. Identity moved from the SLOT to the Confirmation Code after Chris corrected the rule: a booking whose time changes stays green and keeps its own card; only cancelled or removed bookings go grey. That correction exposed a trap no amount of care with strikethrough could have avoided -- the sheet strikes a row for `moved` as well as for `cancelled`, so in the format those two are identical and only the booking's code tells them apart. Card identity is held in the state bucket and treated as a hint, always checked against the board. 48 tests across two new suites. | ✅ |
+
+| 2026-10-07 | 1.0 | **Four faults found by running it on the test board, none of which a test would have caught.** Every update against a real card was being refused -- a real card carries a location derived from its Job and the API rejects it, while the probe reported success because its card had no Job and so no location. Established by canary that the update MERGES rather than replaces, so it now sends only the fields that changed: nothing the server refuses can be sent, and no note or task the team added can be dropped. Then: the change set was the whole desired payload rather than the diff (caught by its own new guard, first time it ran); the title was never compared, so a booking that became a turnover went blue and stayed titled "Clean"; and the read-back looked for a moved card where it used to be, reporting a false failure for a move that had worked. Board left internally consistent -- 49 green cards, 49 "Clean", 18 blue, 18 "Turnover". | ✅ |
+
+| 2026-10-07 | 0.75 | **Answering "can you guarantee existing cards are not touched?" with code rather than with intent.** A card must now be ours on BOTH its title and its colour before anything can adopt, move, recolour or grey it; Austin's own cards are titled in the crews' Spanish and carry no colour at all, so they fail twice. The consequence is a test rather than a claim: on a first live run against a market board nothing passes both tests and the map is empty, so there is no card the system is ABLE to modify -- creates are the only outcome available to it. Verified read-only against the live Austin board, which holds 6 cards inside the window and would take 67 creates and 0 changes. | ✅ |
+
+| 2026-10-07 | 0.75 | **An undo.** A live run now stores the board exactly as it was before touching anything -- cards whole, because a summary cannot be restored from -- as a dated record that is never overwritten plus a `latest` pointer. `card_restore` reads it back and fixes the difference: cards the push created are deleted, cards it changed are put back, and a card missing from the board is reported rather than recreated. It touches only cards that could be ours, because between the snapshot and the restore the team may have edited their own board, and reverting THEIR work is a worse accident than the one being undone. Plus a selectable window, so a cautious first push can be three days and five cards instead of 45 days and 67. | ✅ |
+
+| 2026-10-07 | 0.5 | **[reliability]** Automated the push onto the nightly, Chris Test only, and found that the workflow file and the pinned code come from different places: a step added to main today would have run against code tagged weeks earlier, pushing cards in the old colour with no window and no reconcile. The step now asks the checked-out code whether it is the code the step was written for. Separately, an edit deleted `connecteam_push`'s entry point, so the script imported, defined main(), called nothing, printed nothing and exited 0 -- reported as a SUCCESS by GitHub while 35 test suites passed, because none of them starts a tool the way the workflow starts it. That blind spot is now covered by reading the tool list out of the workflow files. | ✅ |
+
+**Total to date: 28.5 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 6.5 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 12.0 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -82,6 +92,11 @@ before.
 | 2026-09-30 palette found to be 33, not 19 | 0.5 |
 | 2026-09-30 cancellations light gray | 1.75 |
 | 2026-10-06 state review, rotted test, Carondelet finding | 0.25 |
+| 2026-10-07 Stage 1: reconcile by booking, rolling window | 2.5 |
+| 2026-10-07 four faults found on the test board | 1.0 |
+| 2026-10-07 the untouched-cards guarantee | 0.75 |
+| 2026-10-07 snapshot, undo, selectable window | 0.75 |
+| 2026-10-07 nightly automation **[reliability]** | 0.5 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
