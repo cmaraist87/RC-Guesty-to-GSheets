@@ -154,7 +154,11 @@ def find_rows_by_name(ws):
 
 
 def write_fixes(ws, hits, prop_col: int) -> int:
-    col = _col_letter(prop_col)
+    # +1 because `prop_col` is a 0-BASED dataframe index and _col_letter is
+    # 1-BASED ("1 -> A"). Without it every write lands one column to the LEFT of
+    # Property. That happened on 2026-10-07: 54 cells were written, the tool
+    # reported success, and the column it meant to change was untouched.
+    col = _col_letter(prop_col + 1)
     data = [{"range": f"{col}{grid}", "values": [[want]]}
             for grid, _d, _was, want, _c, _how in hits]
     written = 0

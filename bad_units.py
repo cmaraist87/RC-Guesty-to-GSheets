@@ -103,7 +103,11 @@ def find_in_tab(ws) -> tuple[list[tuple], int | None]:
 
 def write_fixes(ws, hits, prop_col: int) -> int:
     """Write the corrected Property cell for every hit that has one."""
-    col = _col_letter(prop_col)
+    # +1 because `prop_col` is a 0-BASED dataframe index and _col_letter is
+    # 1-BASED. This file had the same off-by-one; carondelet_merge was copied
+    # from it and hit the bug live on 2026-10-07, writing 54 cells one column to
+    # the left of Property while reporting success.
+    col = _col_letter(prop_col + 1)
     data = [{"range": f"{col}{grid}", "values": [[fixed]]}
             for grid, _d, _p, _g, _c, fixed, _w in hits if fixed]
     written = 0

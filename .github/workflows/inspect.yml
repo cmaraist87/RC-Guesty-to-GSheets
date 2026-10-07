@@ -51,6 +51,7 @@ on:
           - strike_write_test # WRITES to blank rows below the data, then clears them
           - gcp_whoami       # which Google Cloud project this system runs in
           - list_tabs         # every tab, its size and layout
+          - sheet_header     # the real columns and the letter each lives in
       write:
         description: "bad_units / stale_moves / strike_write_test: actually WRITE"
         required: false
@@ -313,6 +314,10 @@ jobs:
               CITY=""
               if [ -n "${{ inputs.city }}" ]; then CITY="--city ${{ inputs.city }}"; fi
               python -u connecteam_board.py --from "${{ inputs.from }}" --to "${{ inputs.to }}" --keys --jobs --envelope ;;
+            sheet_header)
+              # `month` is the tab title; `code` a comma-separated list of
+              # grid rows to dump verbatim.
+              python -u sheet_header.py --tab "${{ inputs.month }}" --rows "${{ inputs.code }}" ;;
             gcp_whoami)  python -u gcp_whoami.py ;;
             *)           python -u list_tabs.py ;;
           esac
