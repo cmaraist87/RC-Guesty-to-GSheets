@@ -348,8 +348,20 @@ class ConnecteamClient:
         # Read the board back. An accepted request is not a changed card -- the
         # Sheets half of this project lost days to that distinction, and a POST in
         # shift_update_probe returned 200 and did nothing at all.
-        lo = min(int(s.get("startTime") or 0) for s, _f in done) - 86400 if done else 0
-        hi = max(int(s.get("endTime") or 0) for s, _f in done) + 86400 if done else 0
+        # The window has to span where each card WAS and where it was sent. A
+        # moved card is no longer near its old time, and a read-back that looks
+        # only there reports "vanished from the board" for a move that worked --
+        # which is what happened on 2026-10-07 and sent me looking for the wrong
+        # bug.
+        stamps = []
+        for shift, fields in done:
+            for k in ("startTime", "endTime"):
+                stamps.append(int(shift.get(k) or 0))
+                if k in fields:
+                    stamps.append(int(fields[k] or 0))
+        stamps = [t for t in stamps if t]
+        lo = (min(stamps) - 86400) if stamps else 0
+        hi = (max(stamps) + 86400) if stamps else 0
         after = {str(x.get("id")): x for x in
                  (self.existing_shifts(scheduler_id, lo, hi) if done else [])}
         stuck = []

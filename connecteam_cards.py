@@ -159,7 +159,11 @@ def changes(want_payload, have) -> dict:
     own -- notes, tasks, a break -- is theirs and must survive the update.
     """
     out = {}
-    for field in ("startTime", "endTime", "jobId"):
+    # title is in here because a booking can BECOME a turnover. Without it the
+    # colour went blue and the title stayed "Clean" -- 2026-10-07 left seven blue
+    # cards on the test board with five Turnover titles between them, which reads
+    # as a bug to anyone looking at the board and is one.
+    for field in ("startTime", "endTime", "jobId", "title"):
         if field not in want_payload:
             continue
         a, b = have.get(field), want_payload.get(field)
