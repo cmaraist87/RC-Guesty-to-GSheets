@@ -150,6 +150,13 @@ jobs:
             bad_units)
               if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
               python -u bad_units.py $ARGS ;;
+            carondelet)
+              # One cell per row, the Property column, and nothing else.
+              # Matched on the Guesty LISTING ID, never on the name: 1409, 1413,
+              # 1417 and 1421 Caron A/B are real separate flats in the same
+              # building and must not be merged with 1401.
+              if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --fix"; fi
+              python -u carondelet_merge.py $ARGS ;;
             date_rows)   python -u date_rows.py --date "${{ inputs.date }}" ;;
             connecteam)
               MONTH=""
