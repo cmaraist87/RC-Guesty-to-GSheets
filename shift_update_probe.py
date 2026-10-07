@@ -262,6 +262,49 @@ def main(argv=None) -> int:
                   .replace(TEST_SCHEDULER, "{board}"), body is not None)
         break
 
+    # DOES v2 MERGE OR REPLACE? Everything downstream turns on this.
+    #
+    # If it MERGES, the update should send only the fields being changed, and
+    # nothing the team owns can ever be dropped because nothing of theirs is
+    # sent. If it REPLACES, the whole card must go back every time, and every
+    # field the server refuses has to be found and excluded one rejection at a
+    # time -- which is how "can't set locat..." reached a real card on
+    # 2026-10-07 while this probe reported success.
+    #
+    # Tested with a canary: put a distinctive title on the card, then send a
+    # MINIMAL body changing only the colour, then read the title back.
+    if winner:
+        print("")
+        print("  Does v2 merge or replace?")
+        now = read_back(client, sid)
+        canary = "ZZ CANARY DO NOT USE"
+        try:
+            body = {k: v for k, v in now.items()
+                    if k not in ConnecteamClient.NOT_ON_UPDATE}
+            body.update({"shiftId": client.update_id(now), "title": canary})
+            client._request(
+                "PUT", f"/scheduler/v2/schedulers/{TEST_SCHEDULER}/shifts",
+                body=[body], tries=1)
+            marked = read_back(client, sid)
+            if str((marked or {}).get("title")) != canary:
+                print("    could not set the canary; merge test skipped")
+            else:
+                client._request(
+                    "PUT", f"/scheduler/v2/schedulers/{TEST_SCHEDULER}/shifts",
+                    body=[{"shiftId": client.update_id(marked),
+                           "color": STANDARD_COLOR}], tries=1)
+                after = read_back(client, sid) or {}
+                kept = str(after.get("title")) == canary
+                recoloured = str(after.get("color", "")).upper() == STANDARD_COLOR.upper()
+                print(f"    minimal body accepted; colour changed: {recoloured}")
+                print(f"    title survived: {kept}")
+                print(f"    -> v2 {'MERGES' if kept else 'REPLACES'}: send "
+                      f"{'only changed fields' if kept else 'the whole card'}")
+        except ConnecteamError as e:
+            print(f"    minimal body REFUSED: {str(e)[:150]}")
+            print("    -> v2 needs the whole card; fields it rejects must be "
+                  "excluded explicitly")
+
     # Colour is not the only thing that has to move. "Move the existing card"
     # (Chris, 2026-10-06) means a booking whose date or time changes keeps ITS
     # card, so the update has to carry startTime, endTime and jobId too. Proving
