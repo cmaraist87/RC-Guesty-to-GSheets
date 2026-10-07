@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError, check_api_key
+from connecteam_jobs import usable
 from connecteam_map import (CANCELLED_COLOR, STANDARD_COLOR, TEST_SCHEDULER,
                             assert_unassigned)
 
@@ -234,6 +235,78 @@ def main(argv=None) -> int:
                   .replace(TEST_SCHEDULER, "{board}"), body is not None)
         break
 
+    # Colour is not the only thing that has to move. "Move the existing card"
+    # (Chris, 2026-10-06) means a booking whose date or time changes keeps ITS
+    # card, so the update has to carry startTime, endTime and jobId too. Proving
+    # the colour works proves nothing about those.
+    if winner:
+        print("")
+        print("  Can the same call MOVE a card (time, then property)?")
+        now = read_back(client, sid)
+        moved_ok = True
+
+        later = int((WHEN + timedelta(days=3)).timestamp())
+        try:
+            client.recolour_shift  # noqa: B018 - presence check only
+            body = {k: v for k, v in now.items()
+                    if k not in ConnecteamClient.NOT_ON_UPDATE}
+            body.update({"shiftId": client.update_id(now),
+                         "startTime": later,
+                         "endTime": later + 900})
+            client._request(
+                "PUT", f"/scheduler/v2/schedulers/{TEST_SCHEDULER}/shifts",
+                body=[body], tries=1)
+        except ConnecteamError as e:
+            print(f"    time  : REFUSED {str(e)[:110]}")
+            moved_ok = False
+        else:
+            # read_back only looks near WHEN, so widen for a card that moved.
+            found = None
+            for c in client.existing_shifts(
+                    TEST_SCHEDULER, int((WHEN - timedelta(days=9)).timestamp()),
+                    int((WHEN + timedelta(days=9)).timestamp())):
+                if str(c.get("id")) == str(sid):
+                    found = c
+            got = int((found or {}).get("startTime") or 0)
+            ok = got == later
+            print(f"    time  : {'MOVED' if ok else 'accepted but DID NOT move'} "
+                  f"({got} vs wanted {later})")
+            moved_ok = moved_ok and ok
+            if found is not None:
+                now = found
+
+        # A booking can move to a different PROPERTY too, which is a jobId change.
+        others = [j for j in usable(client.list_jobs(TEST_SCHEDULER)[0],
+                                    TEST_SCHEDULER)
+                  if str(j.get("jobId") or j.get("id")) != str(now.get("jobId"))]
+        if not others:
+            print("    jobId : no second Job on the test board to try")
+        else:
+            target = str(others[0].get("jobId") or others[0].get("id"))
+            try:
+                body = {k: v for k, v in now.items()
+                        if k not in ConnecteamClient.NOT_ON_UPDATE}
+                body.update({"shiftId": client.update_id(now), "jobId": target})
+                client._request(
+                    "PUT", f"/scheduler/v2/schedulers/{TEST_SCHEDULER}/shifts",
+                    body=[body], tries=1)
+            except ConnecteamError as e:
+                print(f"    jobId : REFUSED {str(e)[:110]}")
+                moved_ok = False
+            else:
+                found = None
+                for c in client.existing_shifts(
+                        TEST_SCHEDULER, int((WHEN - timedelta(days=9)).timestamp()),
+                        int((WHEN + timedelta(days=9)).timestamp())):
+                    if str(c.get("id")) == str(sid):
+                        found = c
+                got = str((found or {}).get("jobId") or "")
+                ok = got == target
+                print(f"    jobId : {'CHANGED' if ok else 'accepted but DID NOT change'}"
+                      f" ({got[:12]} vs wanted {target[:12]})")
+                moved_ok = moved_ok and ok
+        print(f"  -> a card CAN be moved in place: {moved_ok}")
+
     print("")
     if winner:
         print(f"USE THIS: {winner[0]} {winner[1]}")
@@ -250,8 +323,10 @@ def main(argv=None) -> int:
     # second card instead of updating the first, so going by id would leave a
     # stray probe card on the board -- which is exactly what happened on the
     # 2026-09-30 run before this loop existed.
-    lo = int((WHEN - timedelta(days=2)).timestamp())
-    hi = int((WHEN + timedelta(days=2)).timestamp())
+    # Wider than the card was created at: the move phase above shifts it by
+    # days, and a cleanup that only looks where it started would leave it behind.
+    lo = int((WHEN - timedelta(days=9)).timestamp())
+    hi = int((WHEN + timedelta(days=9)).timestamp())
     mine = [s for s in client.existing_shifts(TEST_SCHEDULER, lo, hi)
             if str(s.get("title")) == TITLE]
     print(f"cleaning up: {len(mine)} card(s) titled {TITLE!r} on the test board")
