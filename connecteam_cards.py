@@ -191,7 +191,30 @@ def slot_key(shift) -> tuple:
             int(shift.get("startTime") or 0))
 
 
-def plan(desired, board, card_map, our_titles=(), stale_color=None):
+def ours(shift, our_titles=(), our_colors=()) -> bool:
+    """Could this card have been made by us? Title AND colour must both match.
+
+    THE SAFETY RAIL, and the reason a live market board can be promised that its
+    existing cards are untouched. Austin's own cards are titled in Spanish --
+    "sale no entran huespedes", "Vacia no entra gente" -- and carry no colour at
+    all. Ours are titled exactly "Clean" or "Turnover" and always carry one of
+    three colours. A card has to clear both tests, so a team card fails twice.
+
+    Both, not either, deliberately. A title test alone would claim a team card
+    that happened to be called Clean; a colour test alone would claim one they
+    had tinted green themselves.
+    """
+    if our_titles and str(shift.get("title") or "") not in our_titles:
+        return False
+    if our_colors:
+        have = str(shift.get("color") or "").upper()
+        if have not in {str(c).upper() for c in our_colors}:
+            return False
+    return True
+
+
+def plan(desired, board, card_map, our_titles=(), stale_color=None,
+         our_colors=()):
     """What to do to the board. Pure, so every branch is testable offline.
 
     desired  : [(code, payload)] -- every card the sheet wants in the window
@@ -227,10 +250,19 @@ def plan(desired, board, card_map, our_titles=(), stale_color=None):
 
     # Adoption. A code with fewer recorded cards than it wants looks for its
     # cards where the old code would have put them.
+    #
+    # ONLY cards that could be ours are adoptable, by `ours` above. This is what
+    # makes "a live market board's existing cards are not touched" a property of
+    # the code and not an observation about today's data: every card that can be
+    # MOVED, RECOLOURED or GREYED below comes from this dict, and this dict holds
+    # only cards the map already recorded or cards that pass both tests.
     by_slot: dict = {}
     for s in board:
-        if str(s.get("id")) not in claimed:
-            by_slot.setdefault(slot_key(s), []).append(s)
+        if str(s.get("id")) in claimed:
+            continue
+        if not ours(s, our_titles, our_colors):
+            continue
+        by_slot.setdefault(slot_key(s), []).append(s)
     for code, wants in want_by_code.items():
         if len(have_by_code.get(code, ())) >= len(wants):
             continue
@@ -269,7 +301,7 @@ def plan(desired, board, card_map, our_titles=(), stale_color=None):
         for s in board:
             if str(s.get("id")) in claimed:
                 continue
-            if str(s.get("title") or "") not in our_titles:
+            if not ours(s, our_titles, our_colors):
                 continue                  # the team's own card; not ours to touch
             if str(s.get("color") or "").upper() == stale_color.upper():
                 continue                  # already grey

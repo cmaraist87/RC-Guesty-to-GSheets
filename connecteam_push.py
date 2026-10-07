@@ -26,10 +26,10 @@ from connecteam_cards import (booking_activity, cards_for_tab, plan,
                               read_map, write_map)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
-                            CITY_SCHEDULERS, STANDARD_TITLE, TEST_SCHEDULER,
-                            TURNOVER_TITLE, WINDOW_DAYS, months_in_window,
-                            scheduler_for, shifts_by_scheduler, timezone_for,
-                            window_bounds)
+                            CITY_SCHEDULERS, STANDARD_COLOR, STANDARD_TITLE,
+                            TEST_SCHEDULER, TURNOVER_COLOR, TURNOVER_TITLE,
+                            WINDOW_DAYS, months_in_window, scheduler_for,
+                            timezone_for, window_bounds)
 from sheet_merge import norm_city
 from sheets_client import (month_worksheets, open_spreadsheet,
                            read_as_dataframe, read_row_marks)
@@ -270,6 +270,7 @@ def main(argv=None) -> int:
     updates, creates, greys, new_map = plan(
         [(c, p) for _r, c, p in desired], on_board, card_map,
         our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
+        our_colors=(STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR),
         stale_color=CANCELLED_COLOR if grey_cancellations else None)
 
     # Move and recolour first. A booking that changed date or time keeps ITS card

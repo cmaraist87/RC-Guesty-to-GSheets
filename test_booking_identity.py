@@ -343,6 +343,105 @@ def test_a_second_run_over_an_unchanged_board_does_nothing():
     print("OK: a settled board produces no actions, mapped or adopted")
 
 
+# ------------------------------------- the rail that protects a crew board
+
+OUR_COLOURS = (STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR)
+
+# Real cards read off the LIVE Austin board (10540759) on 2026-10-07, inside the
+# 45-day window. The crews' own titles are in Spanish and the cards carry NO
+# colour at all. Reproduced from the board rather than invented, because a rail
+# tested against made-up data only tests my own assumptions.
+AUSTIN_REAL = [
+    {"id": "t1", "jobId": "5162b912", "title": "", "color": None},
+    {"id": "t2", "jobId": "a2d0b311", "title": "sale no entran huespedes",
+     "color": None},
+    {"id": "t3", "jobId": "84ee8d80", "title": "sale no entran huespedes",
+     "color": None},
+    {"id": "t4", "jobId": "1ca55baa", "title": "sale no entran huespedes",
+     "color": None},
+]
+
+
+def test_a_real_austin_card_cannot_be_adopted_moved_or_greyed():
+    """The guarantee, against cards actually on the crew board.
+
+    Worst case on purpose: our desired card shares the jobId AND the exact start
+    instant with one of theirs, which is the only way the old slot key could
+    collide. It must still be left alone, and ours created beside it.
+    """
+    board = [dict(c, startTime=1000, endTime=1900) for c in AUSTIN_REAL]
+    u, c, g, m = plan([("HMX", _pay("84ee8d80", 1000))], board, {},
+                      our_titles=OURS, our_colors=OUR_COLOURS,
+                      stale_color=CANCELLED_COLOR)
+    assert u == [], f"a team card would have been modified: {u}"
+    assert g == [], f"a team card would have been greyed: {g}"
+    assert len(c) == 1, c
+    touched = {sid for ids in m.values() for sid in ids}
+    assert touched == set(), f"a team card entered our map: {touched}"
+    print("OK: a real Austin card is not adopted, moved, greyed or claimed")
+
+
+def test_our_title_with_their_colour_is_not_ours():
+    """Both tests, not either. A card called Clean that the team tinted
+    themselves is theirs."""
+    board = [{"id": "x", "jobId": "J1", "title": "Clean", "color": "#D9B443",
+              "startTime": 1000, "endTime": 1900}]
+    u, c, g, m = plan([("HMY", _pay("J1", 1000))], board, {}, our_titles=OURS,
+                      our_colors=OUR_COLOURS, stale_color=CANCELLED_COLOR)
+    assert u == [] and g == [] and len(c) == 1, (u, g, c)
+    print("OK: our title plus a colour we never send is not ours")
+
+
+def test_our_colour_with_their_title_is_not_ours():
+    board = [{"id": "y", "jobId": "J1", "title": "sale entra gente",
+              "color": STANDARD_COLOR, "startTime": 1000, "endTime": 1900}]
+    u, c, g, m = plan([("HMZ", _pay("J1", 1000))], board, {}, our_titles=OURS,
+                      our_colors=OUR_COLOURS, stale_color=CANCELLED_COLOR)
+    assert u == [] and g == [] and len(c) == 1, (u, g, c)
+    print("OK: our colour on a card with their title is not ours")
+
+
+def test_a_card_that_really_is_ours_is_still_adopted():
+    """The rail must not block the thing it exists beside. The 67 cards on Chris
+    Test have to keep being adopted rather than duplicated."""
+    board = [{"id": "mine", "jobId": "J1", "title": "Clean",
+              "color": STANDARD_COLOR, "startTime": 1000, "endTime": 1900}]
+    u, c, g, m = plan([("HMW", _pay("J1", 1000))], board, {}, our_titles=OURS,
+                      our_colors=OUR_COLOURS, stale_color=CANCELLED_COLOR)
+    assert not u and not c and not g, (u, c, g)
+    assert m == {"HMW": ["mine"]}, m
+    print("OK: a card that is ours on both tests is adopted as before")
+
+
+def test_the_first_run_on_a_market_board_can_only_create():
+    """What a first live Austin run can do, stated as a test.
+
+    The map is empty and nothing on the board passes both tests, so there is no
+    card the planner is even able to modify. Creates are the only outcome
+    available to it.
+    """
+    board = [dict(c, startTime=1000 + i, endTime=1900 + i)
+             for i, c in enumerate(AUSTIN_REAL)]
+    wanted = [(f"HM{i}", _pay("84ee8d80", 1000 + i)) for i in range(6)]
+    u, c, g, m = plan(wanted, board, {}, our_titles=OURS,
+                      our_colors=OUR_COLOURS, stale_color=CANCELLED_COLOR)
+    assert u == [] and g == [], (u, g)
+    assert len(c) == len(wanted), c
+    print(f"OK: a first market run has {len(c)} creates and 0 possible changes")
+
+
+def test_a_card_we_made_and_recorded_is_still_modifiable():
+    """The other half: the rail must not make our own cards unmanageable once the
+    map knows them, or a cancellation could never be painted."""
+    board = [{"id": "ours1", "jobId": "J1", "title": "Clean",
+              "color": STANDARD_COLOR, "startTime": 1000, "endTime": 1900}]
+    u, c, g, m = plan([("HMV", _pay("J1", 1000, colour=CANCELLED_COLOR))],
+                      board, {"HMV": ["ours1"]}, our_titles=OURS,
+                      our_colors=OUR_COLOURS, stale_color=CANCELLED_COLOR)
+    assert len(u) == 1 and u[0][2] == {"color": (STANDARD_COLOR, CANCELLED_COLOR)}
+    print("OK: a recorded card of ours can still be recoloured")
+
+
 if __name__ == "__main__":
     test_the_code_is_normalised()
     test_one_live_row_makes_the_booking_active()
@@ -373,4 +472,10 @@ if __name__ == "__main__":
     test_greying_is_off_when_no_stale_colour_is_given()
     test_a_new_booking_is_simply_created()
     test_a_second_run_over_an_unchanged_board_does_nothing()
+    test_a_real_austin_card_cannot_be_adopted_moved_or_greyed()
+    test_our_title_with_their_colour_is_not_ours()
+    test_our_colour_with_their_title_is_not_ours()
+    test_a_card_that_really_is_ours_is_still_adopted()
+    test_the_first_run_on_a_market_board_can_only_create()
+    test_a_card_we_made_and_recorded_is_still_modifiable()
     print("\nALL BOOKING-IDENTITY TESTS PASSED")
