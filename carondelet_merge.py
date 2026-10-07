@@ -118,9 +118,17 @@ def find_rows(ws):
         lid = listing_id_of(r)
         prop = str(r.get("Property", "")).strip()
         if not lid:
-            # Only interesting if the NAME suggests it is one of ours; a row with
-            # no id that looks nothing like 1401 is simply another property.
-            if prop.startswith("1401 Caron"):
+            # Only a row this tool CANNOT resolve is worth reporting. A row with
+            # no listing id whose name is already the merged one needs nothing,
+            # and a row whose exact name is in MERGE_BY_NAME is handled by the
+            # name pass -- neither is an orphan.
+            #
+            # Reporting every 1401-ish row instead made a clean run say "92
+            # row(s) need a human to decide" when there was nothing to decide.
+            if (prop not in MERGE_BY_NAME
+                    and prop not in set(MERGE_BY_NAME.values())
+                    and prop not in set(LISTING_ALIASES.values())
+                    and prop.startswith("1401 Caron")):
                 no_id += 1
             continue
         want = LISTING_ALIASES.get(lid)
