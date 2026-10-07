@@ -19,6 +19,7 @@ on:
         options:
           - stale_moves       # struck rows whose booking is still live elsewhere
           - bad_units         # rows named with an invented unit (427 Gravier 002)
+          - carondelet       # backfill the 1401 Carondelet merge onto old rows
           - date_rows         # every row the sheet holds for one date
           - connecteam        # PREVIEW the Connecteam jobs for one city (never writes)
           - board             # READ what is already on the Connecteam boards
