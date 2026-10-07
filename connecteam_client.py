@@ -304,7 +304,13 @@ class ConnecteamClient:
 
         Creates are left to create_shifts, which already knows how to batch them.
         """
-        acts = [(s, f, d) for s, f, d in updates]
+        # ONLY the fields that actually differ. `updates` carries the whole
+        # desired payload, and sending that as the change set sent isOpenShift,
+        # openSpots and assignedUserIds along with it -- which the guard in
+        # update_shift refused outright, correctly, on 2026-10-07. The diff is
+        # the authority on what moved; the payload is only where the new values
+        # are read from.
+        acts = [(s, {k: p[k] for k in d if k in p}, d) for s, p, d in updates]
         for s in greys:
             acts.append((s, {"color": stale_color},
                          {"color": (s.get("color"), stale_color)}))
