@@ -101,6 +101,10 @@ on:
         description: "Cleanup: collapse repeated copies of the same booking into one row (ticks are kept)"
         type: boolean
         default: false
+      push_cards:
+        description: "Also raise Connecteam job cards on the Chris Test board after the sheet is written"
+        type: boolean
+        default: true
       lookback_days:
         description: "Days of history to fetch (blank = the usual 1). Raise it for a strike repair, or cancellations older than this lose their line."
         type: string
@@ -222,6 +226,45 @@ jobs:
           # actually happened. Today's traceback printed ABOVE the output that
           # preceded it, which makes a failure far harder to read than it is.
           python -u sync.py $DRY $SCHED
+
+      # Raise the Connecteam cards for the markets that are ready, straight after
+      # the sheet is written. CHRIS TEST ONLY: connecteam_push refuses --live
+      # without --test, in code, and this step cannot reach a crew board however
+      # it is invoked.
+      #
+      # NOT on the 22 scheduled crons. Only one of them actually syncs -- the rest
+      # ask shared state, find the day already claimed, and stand down -- so
+      # running this on every one would push 22 times a day and fill the log with
+      # 21 no-ops that hide the real one. The dispatch is the trigger that does
+      # the day's work (Cloud Scheduler sends it, punctually, in Chicago time),
+      # so the cards follow that.
+      #
+      # If a dispatch is ever missed and a cron does the sync instead, the cards
+      # are simply a day late and the next run fixes them. That is a property of
+      # the push being a RECONCILE and not an append: it makes the board match the
+      # sheet for the window, so a skipped day heals itself rather than
+      # accumulating.
+      #
+      # Austin only. It is the one market with a Job for every property; the other
+      # two boards are 22 and 27 properties short, and a property with no Job
+      # produces no card at all, silently. Pushing them now would build a board
+      # that looks complete and is not.
+      - name: Raise Connecteam cards (Chris Test board only)
+        if: >-
+          steps.guard.outputs.run == 'yes'
+          && github.event_name == 'workflow_dispatch'
+          && github.event.inputs.push_cards == 'true'
+        env:
+          CONNECTEAM_API_KEY: ${{ secrets.CONNECTEAM_API_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Sheet run was a DRY RUN, so the cards are previewed only."
+            python -u connecteam_push.py --city Austin --test
+          else
+            python -u connecteam_push.py --city Austin --test --live
+          fi
 
       - name: Upload output snapshot
         if: steps.guard.outputs.run == 'yes'
