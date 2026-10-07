@@ -51,6 +51,48 @@ from sync import _today_chicago, load_config
 MAX_PER_BATCH = 100
 ID_COLUMNS = ("LISTING ID", "Listing ID", "LISTING_ID")
 
+# The listing id is the better key and is tried first, but THE SHEET DOES NOT
+# CARRY IT: on 2026-10-07 all 92 rows spelled "1401 Caron*" had the column empty.
+# So the fallback is an exact NAME match, and exact is the whole point.
+#
+# Without the alias, the two listings normalise to:
+#     "1401 Caron U V1"    -> "1401 Carondelet"      (already the merged name)
+#     "1401 Caron A U V2"   -> "1401 Carondelet A"    (the one to rewrite)
+#
+# Every genuinely separate flat in that building has a DIFFERENT STREET NUMBER --
+# 1405, 1409, 1413, 1417, 1421 Carondelet A/B -- so no exact key here can reach
+# one. A prefix or a strip-the-trailing-letter rule could, which is why neither
+# is used. Checked by _check_table below, not by my say-so.
+MERGE_BY_NAME = {
+    "1401 Carondelet A": "1401 Carondelet",
+}
+
+
+def _street_number(name: str) -> str:
+    head = str(name).strip().split(" ", 1)[0]
+    return head if head.isdigit() else ""
+
+
+def _check_table() -> list:
+    """Refuse to run on a table that could merge two different addresses.
+
+    A guard on the data, not on the code. Adding an entry here merges two places
+    on a crew's schedule, so the cost of a careless line is a cleaner at the
+    wrong door -- the same reason the alias is keyed on an id in the first place.
+    """
+    bad = []
+    targets = set(LISTING_ALIASES.values())
+    for was, want in MERGE_BY_NAME.items():
+        if want not in targets:
+            bad.append(f"{was!r} -> {want!r}: {want!r} is not a name the alias "
+                       f"table produces, so the two have drifted apart")
+        if _street_number(was) != _street_number(want):
+            bad.append(f"{was!r} -> {want!r}: different street numbers, which "
+                       f"means merging two different addresses")
+        if not _street_number(was):
+            bad.append(f"{was!r}: no street number, too loose to be safe")
+    return bad
+
 
 def listing_id_of(row) -> str:
     for col in ID_COLUMNS:
@@ -85,14 +127,36 @@ def find_rows(ws):
         if not want or prop == want:
             continue
         hits.append((i + 2, str(r.get("Date", ""))[:10], prop, want,
-                     str(r.get("Confirmation Code", "")).strip().upper()))
+                     str(r.get("Confirmation Code", "")).strip().upper(), "id"))
     return hits, prop_col, no_id
+
+
+def find_rows_by_name(ws):
+    """The fallback, for a sheet whose rows carry no listing id.
+
+    Exact match on MERGE_BY_NAME. A name that is not a key is not touched, so
+    1405/1409/1413/1417/1421 Carondelet are out of reach by construction rather
+    than by intention.
+    """
+    frame, _header = read_as_dataframe(ws)
+    if not len(frame) or "Property" not in frame.columns:
+        return [], 0
+    prop_col = list(frame.columns).index("Property")
+    hits = []
+    for i, r in frame.iterrows():
+        prop = str(r.get("Property", "")).strip()
+        want = MERGE_BY_NAME.get(prop)
+        if not want:
+            continue
+        hits.append((i + 2, str(r.get("Date", ""))[:10], prop, want,
+                     str(r.get("Confirmation Code", "")).strip().upper(), "name"))
+    return hits, prop_col
 
 
 def write_fixes(ws, hits, prop_col: int) -> int:
     col = _col_letter(prop_col)
     data = [{"range": f"{col}{grid}", "values": [[want]]}
-            for grid, _d, _was, want, _c in hits]
+            for grid, _d, _was, want, _c, _how in hits]
     written = 0
     for start in range(0, len(data), MAX_PER_BATCH):
         chunk = data[start:start + MAX_PER_BATCH]
@@ -115,6 +179,13 @@ def main(argv=None) -> int:
     if not LISTING_ALIASES:
         print("Nothing to do: the alias table is empty.")
         return 0
+    problems = _check_table()
+    if problems:
+        print("REFUSING TO RUN. The name table could merge two different "
+              "addresses:", file=sys.stderr)
+        for line in problems:
+            print(f"   {line}", file=sys.stderr)
+        return 2
     print(f"Alias table: {len(LISTING_ALIASES)} listing id(s) -> "
           f"{sorted(set(LISTING_ALIASES.values()))}")
     for lid, name in sorted(LISTING_ALIASES.items()):
@@ -138,16 +209,18 @@ def main(argv=None) -> int:
         if not args.all and (y, m) < floor:
             continue
         hits, prop_col, no_id = find_rows(ws)
-        orphans += no_id
-        if no_id:
-            print(f"'{ws.title}': {no_id} row(s) look like 1401 Caron* but carry "
-                  f"NO listing id -- reported, not touched.")
+        if not hits and no_id:
+            # No listing id anywhere on this tab, which is the normal case for
+            # this sheet. Fall back to the exact-name table.
+            hits, prop_col = find_rows_by_name(ws)
+        orphans += 0 if hits else no_id
         if not hits:
             continue
         total += len(hits)
         print(f"'{ws.title}': {len(hits)} row(s) to merge")
-        for grid, date, was, want, code in hits:
-            print(f"   row {grid:<5} {date}  {was!r} -> {want!r}  [{code}]")
+        for grid, date, was, want, code, how in hits:
+            print(f"   row {grid:<5} {date}  {was!r} -> {want!r}  [{code}] "
+                  f"(matched on {how})")
         if args.fix:
             fixed += write_fixes(ws, hits, prop_col)
             print(f"   wrote {len(hits)} cell(s).")
