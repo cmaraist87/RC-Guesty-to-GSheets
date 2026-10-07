@@ -397,8 +397,12 @@ def main(argv=None) -> int:
     # days, and a cleanup that only looks where it started would leave it behind.
     lo = int((WHEN - timedelta(days=9)).timestamp())
     hi = int((WHEN + timedelta(days=9)).timestamp())
+    # BOTH titles. The merge test renames the card to the canary, and a cleanup
+    # that swept only the original title left a probe card on the board on
+    # 2026-10-07.
+    probe_titles = {TITLE, "ZZ CANARY DO NOT USE"}
     mine = [s for s in client.existing_shifts(TEST_SCHEDULER, lo, hi)
-            if str(s.get("title")) == TITLE]
+            if str(s.get("title")) in probe_titles]
     print(f"cleaning up: {len(mine)} card(s) titled {TITLE!r} on the test board")
     failed = []
     for s in mine:
@@ -416,7 +420,7 @@ def main(argv=None) -> int:
             print(f"   could not delete {one}: {str(e)[:120]}")
             failed.append(one)
     left = [s for s in client.existing_shifts(TEST_SCHEDULER, lo, hi)
-            if str(s.get("title")) == TITLE]
+            if str(s.get("title")) in probe_titles]
     if left or failed:
         print(f"   !! {len(left)} probe card(s) STILL on the board. Remove by "
               f"hand: titled {TITLE!r} on {WHEN:%d %b %Y}.", file=sys.stderr)

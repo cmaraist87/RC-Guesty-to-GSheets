@@ -164,11 +164,21 @@ def test_the_update_id_is_the_half_before_the_colon():
     print("OK: the update id is the half before the colon")
 
 
-def test_the_update_body_sends_the_card_back_whole():
-    """PUT is a REPLACE. A field left out is a field volunteered for deletion, so
-    the card goes back as it was read with exactly one value changed -- the same
-    care job_share takes with a Job. openSpots is the one exception: v1 rejects
-    it outright on an update and v2 does not want it either."""
+def test_the_update_sends_ONLY_what_changed():
+    """v2 MERGES, so the body carries the id and the changed fields and nothing
+    else.
+
+    This test used to assert the opposite -- that the whole card goes back, on
+    the assumption PUT replaces. That assumption was wrong twice over. It was
+    unnecessary, and it was actively broken: a real card carries `locationData`
+    derived from its Job, and v2 refuses it with error_code 1004, "can't set
+    locat...". Every update against a real card failed that way on 2026-10-07,
+    while the probe reported the call working, because the probe's card had no
+    jobId and so had no location to set.
+
+    Sending only what changed cannot hit a field the server refuses, and cannot
+    drop a note or a task the team added, because neither is sent.
+    """
     from connecteam_client import ConnecteamClient
 
     sent = {}
@@ -186,28 +196,48 @@ def test_the_update_body_sends_the_card_back_whole():
         "startTime": 1790000000, "endTime": 1790000900,
         "timezone": "America/Chicago", "isOpenShift": True,
         "assignedUserIds": [], "openSpots": 1, "isPublished": True,
-        "notes": "something the team added",
+        "notes": ["something the team added"],
+        "locationData": {"address": "1802 Martin Luther King"},
     }
-    Spy().recolour_shift("19713722", existing, CANCELLED_COLOR)
+    Spy().update_shift("19713722", existing, {"color": CANCELLED_COLOR})
 
     assert sent["method"] == "PUT", sent["method"]
     assert sent["path"] == "/scheduler/v2/schedulers/19713722/shifts", sent["path"]
     assert isinstance(sent["body"], list) and len(sent["body"]) == 1
     body = sent["body"][0]
-    assert body["shiftId"] == "6abda1fb827287b856d7f9db", body["shiftId"]
-    assert body["color"] == CANCELLED_COLOR
-    assert "openSpots" not in body, "v1 rejects open_spots on an update"
-    assert "id" not in body, "the compound id must not travel beside shiftId"
-    # Everything else, including a field we know nothing about, survives.
-    for k in ("jobId", "title", "startTime", "endTime", "timezone",
-              "isOpenShift", "isPublished", "notes"):
-        assert body[k] == existing[k], (k, body.get(k), existing[k])
-    assert body["assignedUserIds"] == []
-    print("OK: the update replaces one field and carries the rest back verbatim")
+    assert body == {"shiftId": "6abda1fb827287b856d7f9db",
+                    "color": CANCELLED_COLOR}, body
+    # The two that actually matter, stated separately so a failure names itself.
+    assert "locationData" not in body, "locationData is refused with code 1004"
+    assert "notes" not in body, "a note the team added must not be re-sent"
+    print("OK: the update sends the id and the changed field, nothing else")
 
 
-def test_an_update_cannot_assign_anybody():
-    """The standing rule holds on the update path too, not just on create."""
+def test_a_move_sends_both_times_and_the_property():
+    """A moved booking changes three things at once, and all three must travel."""
+    from connecteam_client import ConnecteamClient
+
+    sent = {}
+
+    class Spy(ConnecteamClient):
+        def __init__(self):
+            pass
+        def _request(self, method, path, body=None, tries=4):
+            sent.update({"body": body})
+            return {}
+
+    existing = {"id": "a:b", "isOpenShift": True, "assignedUserIds": [],
+                "startTime": 1, "endTime": 2, "jobId": "OLD", "title": "Clean"}
+    Spy().update_shift("19713722", existing,
+                       {"startTime": 99, "endTime": 999, "jobId": "NEW"})
+    assert sent["body"][0] == {"shiftId": "a", "startTime": 99, "endTime": 999,
+                               "jobId": "NEW"}, sent["body"][0]
+    print("OK: a move carries startTime, endTime and jobId together")
+
+
+def test_an_update_refuses_a_card_somebody_is_on():
+    """Checked against the card as the BOARD has it, because the body no longer
+    passes through assert_unassigned itself."""
     from connecteam_client import ConnecteamClient
 
     class Spy(ConnecteamClient):
@@ -216,14 +246,14 @@ def test_an_update_cannot_assign_anybody():
         def _request(self, method, path, body=None, tries=4):
             raise AssertionError("the request must never be reached")
 
-    poisoned = {"id": "a:b", "title": "Clean", "startTime": 1, "endTime": 2,
-                "isOpenShift": True, "assignedUserIds": ["someone"], "openSpots": 1}
+    theirs = {"id": "a:b", "isOpenShift": True, "title": "Clean",
+              "assignedUserIds": ["someone"]}
     try:
-        Spy().recolour_shift("19713722", poisoned, CANCELLED_COLOR)
+        Spy().update_shift("19713722", theirs, {"color": CANCELLED_COLOR})
     except ValueError as e:
-        print(f"OK: an update carrying an assignee is refused -> {str(e)[:60]}")
+        print(f"OK: a card with somebody on it is refused -> {str(e)[:52]}")
     else:
-        raise AssertionError("an update with assignedUserIds was NOT refused")
+        raise AssertionError("an assigned card was NOT refused")
 
 
 if __name__ == "__main__":
@@ -239,6 +269,7 @@ if __name__ == "__main__":
     test_a_cancelled_card_is_still_unassigned()
     test_a_cancelled_row_with_no_checkout_is_still_not_a_job()
     test_the_update_id_is_the_half_before_the_colon()
-    test_the_update_body_sends_the_card_back_whole()
-    test_an_update_cannot_assign_anybody()
+    test_the_update_sends_ONLY_what_changed()
+    test_a_move_sends_both_times_and_the_property()
+    test_an_update_refuses_a_card_somebody_is_on()
     print("\nALL CANCELLED-CARD TESTS PASSED")

@@ -241,8 +241,9 @@ class ConnecteamClient:
         return [], " | ".join(tried)
 
     # --- writing ----------------------------------------------------------
-    # Not sent on an update. V1 answers "The open_spots parameter is not
-    # supported in V1 update"; V2 takes the card without it.
+    # Nothing is excluded any more, because nothing extra is sent. Kept as a
+    # name so the reason is findable: openSpots, id and shiftId were the fields
+    # that had to be stripped when the whole card went back.
     NOT_ON_UPDATE = ("openSpots", "id", "shiftId")
 
     @staticmethod
@@ -252,39 +253,50 @@ class ConnecteamClient:
         A card's id on this board is compound -- "6abda1fb827287b856d7f9db:
         4acf6287-ee55-4e94-a479-f2a99e246463". DELETE needs the whole string.
         V2's update needs only the part BEFORE the colon and answers "shift id is
-        invalid" (1004) for the whole thing or for the half after it. Established
-        by shift_update_probe on 2026-09-30; nothing documents it.
+        invalid" (1004) for anything else. Nothing documents it; shift_update_probe
+        established it on 2026-09-30 by trying both halves.
         """
         return str(shift.get("id") or shift.get("shiftId") or "").split(":", 1)[0]
 
     def update_shift(self, scheduler_id: str, shift: dict, fields: dict) -> dict:
         """Change named fields on ONE existing card. Returns the response.
 
-        PUT /scheduler/v2/schedulers/{board}/shifts, body [{shiftId, ...}].
+        PUT /scheduler/v2/schedulers/{board}/shifts, body [{shiftId, ...changed}].
+
+        SENDS ONLY WHAT CHANGES, because v2 MERGES -- proved on 2026-10-07 with a
+        canary: a card was given a distinctive title, then sent a body carrying
+        only `color`, and the title came back intact.
+
+        It used to send the card back whole, on the assumption that PUT replaces.
+        That was wrong twice over. It was unnecessary, and it was actively broken:
+        a real card carries `locationData` derived from its Job, and v2 refuses it
+        with error_code 1004, "can't set locat...". Every update against a real
+        Austin or Chris Test card failed that way, while the probe reported the
+        call working -- the probe's card had no jobId, so it had no location to
+        set. Sending only the changed fields cannot hit a rejected field, and
+        cannot drop a note or a task the team added, because neither is sent.
 
         v2, because v1 cannot: every card this system makes is an open shift, and
         v1 refuses those with "can't edit root open shift" whatever the open-spot
-        count. `shiftId`, not `id`, and only the half of the compound id before
-        the colon. No openSpots: "not supported in V1 update". None of that is
-        documented; shift_update_probe established it on 2026-09-30 and confirmed
-        on 2026-10-06 that startTime, endTime and jobId move too, not just colour.
-
-        The card is sent back WHOLE with those fields replaced, the way job_share
-        writes a Job back, because PUT REPLACES and a field left out is a field
-        volunteered for deletion. That is how a crew's note or an added task
-        survives a card being moved.
+        count.
         """
         sid = self.update_id(shift)
         if not sid:
             raise ConnecteamError("cannot update a card with no id")
-        body = {k: v for k, v in shift.items() if k not in self.NOT_ON_UPDATE}
-        body.update(fields)
-        body["shiftId"] = sid
-        # The standing rule applies to an update exactly as to a create: a card
-        # must never come back with somebody on it.
-        assert_unassigned([body])
+        # The standing rule, checked against the card as the BOARD has it: a card
+        # somebody is on is not ours to move.
+        assert_unassigned([shift])
+        # And nothing we send may put anybody on it. Belt and braces, since the
+        # body no longer passes through assert_unassigned itself.
+        bad = [k for k in fields
+               if "user" in k.lower() or "assign" in k.lower()]
+        if bad:
+            raise ValueError(
+                f"refusing to send {bad} on a card update; a card is never "
+                f"assigned to a person by this system")
         return self._request(
-            "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts", body=[body])
+            "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts",
+            body=[{"shiftId": sid, **fields}])
 
     def apply_card_plan(self, scheduler_id: str, updates, greys, stale_color=None,
                         live: bool = False, job_names=None) -> tuple:
