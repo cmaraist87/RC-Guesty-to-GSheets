@@ -16,6 +16,7 @@ answer that.
 """
 from __future__ import annotations
 
+import argparse
 import colorsys
 import os
 import re
@@ -56,7 +57,19 @@ def family(hue: float, sat: float) -> str:
 
 
 def main(argv=None) -> int:
-    client = ConnecteamClient(check_api_key(os.environ.get("CONNECTEAM_API_KEY", "")))
+    # A parser with no options, purely so --help answers and the tool can be
+    # started to see what it does. It used to raise straight out of
+    # check_api_key, so a missing key arrived as a traceback rather than as the
+    # one sentence that fixes it.
+    argparse.ArgumentParser(description=__doc__,
+                            formatter_class=argparse.RawDescriptionHelpFormatter
+                            ).parse_args(argv)
+    try:
+        client = ConnecteamClient(
+            check_api_key(os.environ.get("CONNECTEAM_API_KEY", "")))
+    except ConnecteamError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
 
     # A colour that cannot be on any palette. The shift is otherwise valid, so
     # the ONLY thing wrong with it is the colour -- which is what makes the

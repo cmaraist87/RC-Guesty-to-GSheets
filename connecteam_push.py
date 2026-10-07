@@ -331,3 +331,7 @@ def main(argv=None) -> int:
     print("")
     print(f"Created {len(created)} job(s) in {args.city}, all Unassigned.")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
