@@ -72,11 +72,15 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.5 | **[reliability]** Automated the push onto the nightly, Chris Test only, and found that the workflow file and the pinned code come from different places: a step added to main today would have run against code tagged weeks earlier, pushing cards in the old colour with no window and no reconcile. The step now asks the checked-out code whether it is the code the step was written for. Separately, an edit deleted `connecteam_push`'s entry point, so the script imported, defined main(), called nothing, printed nothing and exited 0 -- reported as a SUCCESS by GitHub while 35 test suites passed, because none of them starts a tool the way the workflow starts it. That blind spot is now covered by reading the tool list out of the workflow files. | ✅ |
 
-**Total to date: 28.5 h**
+| 2026-10-07 | 0.5 | **1401 Carondelet merged across the whole workbook** -- 54 rows in seven tabs now carry the one name, so the unit is one property on the schedule and resolves to one Job instead of two. Matched on an exact name rather than a pattern, because 1405, 1409, 1413, 1417 and 1421 Carondelet A/B are real separate flats and a looser rule would send a cleaner to the wrong door; a guard refuses any entry that maps between two different street numbers. *The off-by-one below, and its repair, are absorbed.* | ✅ |
+
+| 2026-10-07 | 0.0 | **ABSORBED -- my error.** The first run of that cleanup wrote all 54 cells one column to the LEFT of Property, into `assigned`, which is a checkbox the team ticks: a 0-based column index was handed to a 1-based column-letter helper. It reported "Merged 54 of 54" and changed nothing it meant to, caught only because the verify re-run still found all 54 rows. Recovered the prior values from the morning's own snapshot artifact -- 25 provably FALSE, none TRUE, 29 with no record -- restored all 54 to a real boolean FALSE, then applied the merge to the right column and confirmed both. `bad_units.py` carried the identical bug and was fixed too. Added `sheet_header`, which prints every column with the letter it actually lives in, because the two conventions were nowhere written down and that is what made the fault invisible. | ✅ |
+
+**Total to date: 29.0 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 12.0 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 12.5 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -97,6 +101,7 @@ before.
 | 2026-10-07 the untouched-cards guarantee | 0.75 |
 | 2026-10-07 snapshot, undo, selectable window | 0.75 |
 | 2026-10-07 nightly automation **[reliability]** | 0.5 |
+| 2026-10-07 1401 Carondelet merged workbook-wide | 0.5 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
