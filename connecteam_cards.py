@@ -174,3 +174,161 @@ def changes(want_payload, have) -> dict:
     if b and a != b:
         out["color"] = (have.get("color"), want_payload.get("color"))
     return out
+
+
+# ---------------------------------------------------------------- the plan
+
+def slot_key(shift) -> tuple:
+    """The OLD identity, kept only to adopt cards made before codes were tracked.
+
+    Ninety-five cards were already on the test board when identity moved to the
+    Confirmation Code, and they carry no record of which booking they belong to.
+    Rather than delete and rebuild the board, a card whose code we do not know is
+    matched on the slot it occupies -- which is what the old code matched on -- and
+    from then on it is in the map like any other.
+    """
+    return (str(shift.get("jobId") or ""), str(shift.get("title") or ""),
+            int(shift.get("startTime") or 0))
+
+
+def plan(desired, board, card_map, our_titles=(), stale_color=None):
+    """What to do to the board. Pure, so every branch is testable offline.
+
+    desired  : [(code, payload)] -- every card the sheet wants in the window
+    board    : [shift] -- every card actually on the board in the window
+    card_map : {code: [shift id, ...]} -- what an earlier run recorded
+
+    Returns (updates, creates, greys, new_map):
+      updates : [(shift, payload, changes)] -- move or recolour in place
+      creates : [(code, payload)]           -- raise a new card
+      greys   : [shift]                     -- ours, wanted by nobody: removed
+      new_map : {code: [shift id, ...]}     -- to store for the next run
+
+    A card is only GREYED when no booking claims it at all. That is the "removed"
+    case, which should never happen because cancellations stay in the sheet. A
+    cancelled booking does not come through here as a grey: it comes through as a
+    desired card that is already grey, and so is a normal update.
+    """
+    by_id = {str(s.get("id")): s for s in board}
+    claimed: set = set()
+
+    want_by_code: dict = {}
+    for code, payload in desired:
+        want_by_code.setdefault(code, []).append(({}, code, payload))
+
+    # Cards an earlier run recorded against each code, still on the board.
+    have_by_code: dict = {}
+    for code in want_by_code:
+        for sid in card_map.get(code, ()):
+            s = by_id.get(str(sid))
+            if s is not None and str(sid) not in claimed:
+                have_by_code.setdefault(code, []).append(s)
+                claimed.add(str(sid))
+
+    # Adoption. A code with fewer recorded cards than it wants looks for its
+    # cards where the old code would have put them.
+    by_slot: dict = {}
+    for s in board:
+        if str(s.get("id")) not in claimed:
+            by_slot.setdefault(slot_key(s), []).append(s)
+    for code, wants in want_by_code.items():
+        if len(have_by_code.get(code, ())) >= len(wants):
+            continue
+        for _r, _c, payload in wants:
+            pool = by_slot.get(slot_key(payload)) or []
+            while pool:
+                s = pool.pop(0)
+                if str(s.get("id")) in claimed:
+                    continue
+                have_by_code.setdefault(code, []).append(s)
+                claimed.add(str(s.get("id")))
+                break
+
+    updates, creates, new_map = [], [], {}
+    for code, wants in want_by_code.items():
+        pairs, to_create, orphans = pair_by_code(wants, have_by_code.get(code, []))
+        kept = []
+        for (_r, _c, payload), have in pairs:
+            diff = changes(payload, have)
+            if diff:
+                updates.append((have, payload, diff))
+            kept.append(str(have.get("id")))
+        for _r, _c, payload in to_create:
+            creates.append((code, payload))
+        # An orphan here means the booking wants FEWER cards than it has, which
+        # only happens if a combined listing stopped being combined. Reported by
+        # being left out of the map rather than acted on; deleting a card for a
+        # LIVE booking is not something to do on a guess.
+        for have in orphans:
+            kept.append(str(have.get("id")))
+        if kept:
+            new_map[code] = kept
+
+    greys = []
+    if stale_color:
+        for s in board:
+            if str(s.get("id")) in claimed:
+                continue
+            if str(s.get("title") or "") not in our_titles:
+                continue                  # the team's own card; not ours to touch
+            if str(s.get("color") or "").upper() == stale_color.upper():
+                continue                  # already grey
+            greys.append(s)
+    return updates, creates, greys, new_map
+
+
+# ------------------------------------------------------- where the map lives
+
+def map_name(board: str) -> str:
+    """The state-bucket object holding {code -> card ids} for one board.
+
+    Per board, not one file for all of them. The boards go live at different
+    times, and a bad write while proving one market must not be able to take the
+    others' mappings with it.
+    """
+    return f"connecteam/cards-{board}.json"
+
+
+def read_map(store, board: str):
+    """({code: [id, ...]}, generation). ({}, 0) when there is nothing yet.
+
+    The map is a HINT, never an authority. Every id it returns is checked against
+    the board before anything is done with it, because a card deleted in the
+    Connecteam UI leaves the map stale and nothing tells us. An unreadable map is
+    not fatal either: the plan falls back to adopting cards by their slot, which
+    is how the first run after this change behaves anyway.
+    """
+    import json
+    if store is None:
+        return {}, 0
+    try:
+        raw, gen = store.read(map_name(board))
+    except Exception as e:  # noqa: BLE001 - a missing map must not stop the push
+        print(f"   (could not read the card map: {e}; falling back to slots)")
+        return {}, 0
+    if not raw:
+        return {}, 0
+    try:
+        got = json.loads(raw)
+    except ValueError as e:
+        print(f"   (card map is not valid JSON: {e}; falling back to slots)")
+        return {}, 0
+    if not isinstance(got, dict):
+        return {}, 0
+    return {str(k): [str(v) for v in (vs or [])] for k, vs in got.items()}, gen
+
+
+def write_map(store, board: str, mapping: dict, generation: int) -> bool:
+    """Store the map. False if it could not be written, which is not fatal."""
+    import json
+    if store is None:
+        return False
+    payload = json.dumps(mapping, indent=1, sort_keys=True).encode("utf-8")
+    try:
+        store.write(map_name(board), payload, if_generation_match=generation)
+    except Exception as e:  # noqa: BLE001 - losing the map costs a slot-adoption
+        print(f"   (could not write the card map: {e}. The next run adopts cards "
+              f"by their slot instead, which is slower to reason about but "
+              f"correct.)")
+        return False
+    return True

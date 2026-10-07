@@ -20,7 +20,7 @@ are not: a moved booking still has a live row somewhere.
 import pandas as pd
 
 from connecteam_cards import (booking_activity, cards_for_tab, changes, code_of,
-                              colour_for, pair_by_code)
+                              colour_for, pair_by_code, plan)
 from connecteam_map import CANCELLED_COLOR, STANDARD_COLOR, TURNOVER_COLOR
 
 COL = "Confirmation Code"
@@ -233,6 +233,116 @@ def test_changes_sees_a_recolour_on_its_own():
     print("OK: a cancellation with no time change is still a change")
 
 
+# ------------------------------------------------------------------ the plan
+
+def _board(sid, jid, start, colour=STANDARD_COLOR, title="Clean"):
+    return {"id": sid, "jobId": jid, "title": title, "startTime": start,
+            "endTime": start + 900, "color": colour}
+
+
+def _pay(jid, start, colour=STANDARD_COLOR, title="Clean"):
+    return {"jobId": jid, "title": title, "startTime": start,
+            "endTime": start + 900, "color": colour}
+
+
+OURS = ("Clean", "Turnover")
+
+
+def test_a_moved_booking_is_an_update_not_a_create_and_a_grey():
+    """The whole correction, at the level the board actually sees."""
+    u, c, g, m = plan([("HMA", _pay("J1", 2000))],
+                      [_board("s1", "J1", 1000)], {"HMA": ["s1"]},
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert len(u) == 1 and not c and not g, (u, c, g)
+    assert u[0][2] == {"startTime": (1000, 2000), "endTime": (1900, 2900)}
+    assert m == {"HMA": ["s1"]}, m
+    print("OK: a moved booking is one update, no new card, no grey")
+
+
+def test_an_unmapped_card_is_adopted_by_its_slot():
+    """The 95 cards already on the test board carry no code. Rather than delete
+    and rebuild, a card is matched where the OLD identity would have put it, and
+    is in the map from then on."""
+    u, c, g, m = plan([("HMB", _pay("J1", 1000))],
+                      [_board("s1", "J1", 1000)], {},          # empty map
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert not u and not c and not g, (u, c, g)
+    assert m == {"HMB": ["s1"]}, m
+    print("OK: an existing card is adopted, not duplicated and not greyed")
+
+
+def test_adoption_does_not_steal_a_card_from_another_code():
+    """Two bookings, one card. Whoever adopts it, the other must CREATE rather
+    than both claiming the same card."""
+    u, c, g, m = plan([("HMC", _pay("J1", 1000)), ("HMD", _pay("J1", 1000))],
+                      [_board("s1", "J1", 1000)], {},
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert len(c) == 1, c
+    claimed = [sid for ids in m.values() for sid in ids]
+    assert claimed == ["s1"], claimed
+    print("OK: one card is adopted once; the other booking gets a new card")
+
+
+def test_only_a_card_nobody_claims_is_greyed():
+    """Grey means REMOVED. A cancelled booking does not arrive here as a grey --
+    it arrives as a desired card that is already grey, so it is a normal update."""
+    u, c, g, m = plan([], [_board("s1", "J1", 1000)], {},
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert [s["id"] for s in g] == ["s1"], g
+    print("OK: a card no booking claims is greyed")
+
+
+def test_a_cancelled_booking_is_an_update_to_grey_not_a_removal():
+    u, c, g, m = plan([("HME", _pay("J1", 1000, colour=CANCELLED_COLOR))],
+                      [_board("s1", "J1", 1000, colour=STANDARD_COLOR)],
+                      {"HME": ["s1"]}, our_titles=OURS,
+                      stale_color=CANCELLED_COLOR)
+    assert len(u) == 1 and not g, (u, g)
+    assert u[0][2] == {"color": (STANDARD_COLOR, CANCELLED_COLOR)}
+    print("OK: a cancellation is a recolour of its own card, not a removal")
+
+
+def test_the_team_s_cards_are_never_greyed():
+    board = [_board("t1", "J9", 1000, colour="#D9B443", title="6504 Porter A"),
+             _board("t2", "J9", 1000, title="")]
+    u, c, g, m = plan([], board, {}, our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert g == [], g
+    print("OK: a card whose title is not ours is left alone")
+
+
+def test_an_already_grey_card_is_not_repainted():
+    """Idempotence. A nightly run that repaints the same cards every night burns
+    calls and makes the log useless for spotting a real change."""
+    u, c, g, m = plan([], [_board("s1", "J1", 1000, colour=CANCELLED_COLOR)], {},
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert g == [], g
+    print("OK: an already-grey card is left as it is")
+
+
+def test_greying_is_off_when_no_stale_colour_is_given():
+    u, c, g, m = plan([], [_board("s1", "J1", 1000)], {}, our_titles=OURS,
+                      stale_color=None)
+    assert g == [], g
+    print("OK: no stale colour means nothing is greyed")
+
+
+def test_a_new_booking_is_simply_created():
+    u, c, g, m = plan([("HMF", _pay("J1", 1000))], [], {},
+                      our_titles=OURS, stale_color=CANCELLED_COLOR)
+    assert not u and len(c) == 1 and not g
+    assert m == {}, m          # nothing to record until the card has an id
+    print("OK: a booking with no card yet is created")
+
+
+def test_a_second_run_over_an_unchanged_board_does_nothing():
+    board = [_board("s1", "J1", 1000)]
+    for mapping in ({}, {"HMG": ["s1"]}):
+        u, c, g, m = plan([("HMG", _pay("J1", 1000))], board, mapping,
+                          our_titles=OURS, stale_color=CANCELLED_COLOR)
+        assert not u and not c and not g, (mapping, u, c, g)
+    print("OK: a settled board produces no actions, mapped or adopted")
+
+
 if __name__ == "__main__":
     test_the_code_is_normalised()
     test_one_live_row_makes_the_booking_active()
@@ -253,4 +363,14 @@ if __name__ == "__main__":
     test_extra_wanted_cards_are_created_and_extra_existing_are_orphans()
     test_changes_ignores_fields_the_team_own()
     test_changes_sees_a_recolour_on_its_own()
+    test_a_moved_booking_is_an_update_not_a_create_and_a_grey()
+    test_an_unmapped_card_is_adopted_by_its_slot()
+    test_adoption_does_not_steal_a_card_from_another_code()
+    test_only_a_card_nobody_claims_is_greyed()
+    test_a_cancelled_booking_is_an_update_to_grey_not_a_removal()
+    test_the_team_s_cards_are_never_greyed()
+    test_an_already_grey_card_is_not_repainted()
+    test_greying_is_off_when_no_stale_colour_is_given()
+    test_a_new_booking_is_simply_created()
+    test_a_second_run_over_an_unchanged_board_does_nothing()
     print("\nALL BOOKING-IDENTITY TESTS PASSED")

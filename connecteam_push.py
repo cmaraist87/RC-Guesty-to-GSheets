@@ -22,6 +22,8 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError
+from connecteam_cards import (booking_activity, cards_for_tab, plan,
+                              read_map, write_map)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
                             CITY_SCHEDULERS, STANDARD_TITLE, TEST_SCHEDULER,
@@ -31,7 +33,7 @@ from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
 from sheet_merge import norm_city
 from sheets_client import (month_worksheets, open_spreadsheet,
                            read_as_dataframe, read_row_marks)
-from sync import _spanish_tab, _today_chicago, load_config
+from sync import _spanish_tab, _today_chicago, load_config, state_store
 
 
 def main(argv=None) -> int:
@@ -117,7 +119,7 @@ def main(argv=None) -> int:
     hi = int(datetime.combine(last, time(23, 59, 59), tzinfo=tz).timestamp())
 
     ss = open_spreadsheet(cfg["sheet_id"], cfg["sa_json"])
-    tabs = month_worksheets(ss)
+    tabs_by_month = month_worksheets(ss)
 
     client = ConnecteamClient(key)
     all_jobs, how = client.list_jobs(board_for_jobs)
@@ -139,50 +141,78 @@ def main(argv=None) -> int:
     # One tab at a time, because strikethrough positions are per worksheet. A
     # concatenated frame would need its indices remapped, and an off-by-one there
     # paints the wrong booking grey while leaving a real cancellation looking
-    # live. Building per tab and merging the PAYLOADS avoids the question.
-    jobs = []
+    # live. Read whole here, judged below, built per tab.
+    read_tabs = []
     missing = []
     for (y, m) in months_in_window(first, last):
-        ws = tabs.get((y, m))
+        ws = tabs_by_month.get((y, m))
         if ws is None:
             missing.append(f"{y}-{m:02d} ('{_spanish_tab(f'{y}-{m:02d}')}')")
             continue
-        rows, _ = read_as_dataframe(ws)
+        frame, _hdr = read_as_dataframe(ws)
         # A SECOND read of the same tab, for its FORMAT. A cancellation is not in
-        # any cell's value -- it is strikethrough on the row -- so the frame
-        # above cannot answer "was this cancelled?" and never could.
+        # any cell's value -- it is strikethrough on the row -- so the frame above
+        # cannot answer "was this cancelled?" and never could.
         struck, _hl, _acc = read_row_marks(ws)
-        cancelled_pos = struck if grey_cancellations else frozenset()
-        groups = shifts_by_scheduler(rows, only_city=args.city,
-                                     job_index=job_index,
-                                     cancelled_pos=cancelled_pos)
-        here = groups.get(board, [])
-        inside = [(r, p) for r, p in here if lo <= int(p["startTime"]) <= hi]
-        jobs.extend(inside)
-        print(f"  '{ws.title}': {len(rows)} row(s), {len(struck)} struck, "
-              f"{len(here)} {args.city} card(s), {len(inside)} inside the window.")
+        read_tabs.append((ws.title, frame, struck))
+        print(f"  '{ws.title}': {len(frame)} row(s), {len(struck)} struck.")
     if missing:
         print(f"  no tab for {', '.join(missing)} -- nothing read for those "
               f"month(s). A month with no tab yet is normal near the window's "
               f"far edge.")
-    in_city = int((rows.get("City", "").map(norm_city) == norm_city(args.city)).sum()) \
-        if "City" in rows.columns else 0
-    print(f"{in_city} row(s) are {args.city}; {len(jobs)} of them are cleans "
-          f"with a Job to point at (a row with no check-out is not a job).")
+
+    # Is each BOOKING live? Judged by Confirmation Code across EVERY tab read,
+    # not per tab and not within the window, because a booking can move from one
+    # month into the next and its live row is then somewhere this window does not
+    # cover. Judged narrowly, that booking reads as cancelled and a crew is told
+    # a job is off when it is merely later.
+    active = booking_activity([(f, st) for _t, f, st in read_tabs])
+    n_dead = sum(1 for v in active.values() if not v)
+    print(f"{len(active)} booking(s) across those tabs, {n_dead} of them "
+          f"cancelled (every row struck, and live nowhere else).")
+
+    # What the sheet wants on the board: one entry per card, carrying the code it
+    # belongs to so a later run can find the same card again.
+    desired = []
+    in_city = 0
+    unmatched = set()
+    for title, frame, struck in read_tabs:
+        if not len(frame) or "City" not in frame.columns:
+            continue
+        # Boolean mask, not a rebuild: it keeps the original index, which is what
+        # `struck` is expressed in.
+        mine = frame[frame["City"].map(norm_city) == norm_city(args.city)]
+        in_city += len(mine)
+        for _i, r in mine.iterrows():
+            if str(r.get("Check out - Time", "") or r.get("Check-out Time", "")).strip() \
+                    and resolve(r.get("Property", ""), job_index)[0] is None:
+                prop = str(r.get("Property", "")).strip()
+                if prop:
+                    unmatched.add(prop)
+        for row, code, payload in cards_for_tab(mine, struck, active,
+                                                job_index=job_index):
+            if scheduler_for(row.get("City", "")) != board:
+                continue
+            if not (lo <= int(payload["startTime"]) <= hi):
+                continue
+            desired.append((row, code, payload))
+
+    print(f"{in_city} row(s) are {args.city} across the window's tabs; "
+          f"{len(desired)} card(s) wanted inside the window (a row with no "
+          f"check-out is not a job, and a moved booking's old row is not either).")
+    n_grey_wanted = sum(1 for _r, _c, p in desired
+                        if str(p.get("color", "")).upper() == CANCELLED_COLOR.upper())
+    if n_grey_wanted:
+        print(f"  {n_grey_wanted} of them are cancelled bookings, so they are "
+              f"{CANCELLED_COLOR}.")
 
     # Every property that produced no card, and why. These are the ones the team
     # has to create in Connecteam before their cleans can reach anybody.
-    unmatched = sorted({str(r.get("Property", "")).strip()
-                        for _i, r in rows.iterrows()
-                        if norm_city(r.get("City", "")) == norm_city(args.city)
-                        and str(r.get("Check out - Time", "")
-                                or r.get("Check-out Time", "")).strip()
-                        and resolve(r.get("Property", ""), job_index)[0] is None})
     if unmatched:
         print("")
         print(f"  {len(unmatched)} propertie(s) have NO Job on this board, so "
               f"their cleans are not being sent:")
-        for prop in unmatched:
+        for prop in sorted(unmatched):
             print(f"     {prop}")
         print("  Create these as Jobs in Connecteam and they are picked up "
               "on the next run.")
@@ -190,7 +220,7 @@ def main(argv=None) -> int:
     # What each card will actually point at, so the choice can be read before it
     # is made. Where several Jobs matched, the reason says what was passed over.
     shown = {}
-    for row, payload in jobs:
+    for row, _code, _payload in desired:
         prop = str(row.get("Property", "")).strip()
         if prop not in shown:
             _jid, name, why = resolve(prop, job_index)
@@ -203,11 +233,7 @@ def main(argv=None) -> int:
             print(f"   {mark} {prop:<30} -> {name}")
             if mark == " *":
                 print(f"        {why}")
-    if not jobs:
-        print("Nothing to do.")
-        return 0
 
-    payloads = [p for _, p in jobs]
     if args.test:
         # Verify before redirecting. The test board's id has already changed twice --
         # once because a group id was mistaken for it, once because the board was
@@ -227,26 +253,37 @@ def main(argv=None) -> int:
               f"({boards[board]!r}), not to {args.city}'s own board.")
     print(f"\nBoard {board} ({args.city}) -- "
           + ("CREATING" if args.live else "PREVIEW, nothing will be sent") + ":\n")
-    # Before creating. Two things create_shifts cannot do: repaint a card whose
-    # booking was cancelled after it was made (it is "already there", so it is
-    # skipped), and notice a card the sheet no longer wants at all.
-    #
-    # A VANISHED booking is greyed, not deleted -- Chris' call on 2026-10-06. It
-    # leaves a visible trace that something changed instead of work silently
-    # disappearing off the board. Only cards titled as ours are eligible: the
-    # team make their own cards on these boards, carrying the property in the
-    # title, and repainting one of those would be us editing their schedule.
+    job_names = {str(j.get("jobId") or j.get("id")):
+                 (j.get("name") or j.get("title") or "") for j in all_jobs}
+
+    # The board as it is now, and what an earlier run recorded about which card
+    # belongs to which booking. The map is a HINT: every id in it is checked
+    # against the board below, because a card deleted in the Connecteam UI leaves
+    # it stale and nothing tells us.
+    store = state_store(cfg)
+    card_map, generation = read_map(store, board)
+    on_board = client.existing_shifts(board, lo, hi)
+    print(f"   {len(on_board)} card(s) already on the board in the window; "
+          f"the map knows {sum(len(v) for v in card_map.values())} of them "
+          f"across {len(card_map)} booking(s).")
+
+    updates, creates, greys, new_map = plan(
+        [(c, p) for _r, c, p in desired], on_board, card_map,
+        our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
+        stale_color=CANCELLED_COLOR if grey_cancellations else None)
+
+    # Move and recolour first. A booking that changed date or time keeps ITS card
+    # -- Chris, 2026-10-06 -- so this is an update, not a delete and a create, and
+    # it has to happen before create_shifts so the moved card is already where the
+    # sheet wants it and is not created a second time.
     try:
-        client.reconcile_colours(
-            board, payloads, lo, hi, live=args.live,
+        client.apply_card_plan(
+            board, updates, greys,
             stale_color=CANCELLED_COLOR if grey_cancellations else None,
-            our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
-            job_names={str(j.get("jobId") or j.get("id")):
-                       (j.get("name") or j.get("title") or "")
-                       for j in all_jobs})
+            live=args.live, job_names=job_names)
     except ConnecteamError as e:
         print("", file=sys.stderr)
-        print(f"!! could not reconcile colours: {e}", file=sys.stderr)
+        print(f"!! could not move or recolour cards: {e}", file=sys.stderr)
         return 1
     except ValueError as e:            # the unassigned gate, on an update
         print("", file=sys.stderr)
@@ -255,24 +292,42 @@ def main(argv=None) -> int:
 
     try:
         created = client.create_shifts(
-            board, payloads, live=args.live,
+            board, [p for _c, p in creates], live=args.live,
             # So the preview names the property, not thirty-eight "Clean"s.
-            job_names={str(j.get("jobId") or j.get("id")):
-                       (j.get("name") or j.get("title") or "")
-                       for j in all_jobs})
+            job_names=job_names)
     except ConnecteamError as e:
-        print(f"\n!! {e}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(f"!! {e}", file=sys.stderr)
         return 1
     except ValueError as e:            # the unassigned gate
-        print(f"\n!! REFUSED: {e}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(f"!! REFUSED: {e}", file=sys.stderr)
         return 1
 
-    if args.live:
-        print(f"\nCreated {len(created)} job(s) in {args.city}, all Unassigned.")
-    else:
-        print("\nNothing was created. Re-run with --live once this list looks right.")
+    if not args.live:
+        print("")
+        print("Nothing was created, moved or recoloured. Re-run with --live once "
+              "this list looks right.")
+        return 0
+
+    # Record the new cards against their bookings. Paired by order within each
+    # batch, which is the only correspondence the create response gives us; if
+    # the counts disagree the pairing is abandoned rather than guessed at, and
+    # the next run adopts those cards by their slot instead.
+    if created and len(created) == len(creates):
+        for (code, _payload), got in zip(creates, created):
+            sid = str(got.get("id") or got.get("shiftId") or "")
+            if sid:
+                new_map.setdefault(code, []).append(sid)
+    elif created:
+        print(f"   (created {len(created)} card(s) for {len(creates)} request(s); "
+              f"not recording the mapping on a count mismatch. The next run "
+              f"adopts them by their slot.)")
+
+    if write_map(store, board, new_map, generation):
+        print(f"   card map stored: {sum(len(v) for v in new_map.values())} "
+              f"card(s) across {len(new_map)} booking(s).")
+
+    print("")
+    print(f"Created {len(created)} job(s) in {args.city}, all Unassigned.")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -257,6 +257,103 @@ class ConnecteamClient:
         """
         return str(shift.get("id") or shift.get("shiftId") or "").split(":", 1)[0]
 
+    def update_shift(self, scheduler_id: str, shift: dict, fields: dict) -> dict:
+        """Change named fields on ONE existing card. Returns the response.
+
+        PUT /scheduler/v2/schedulers/{board}/shifts, body [{shiftId, ...}].
+
+        v2, because v1 cannot: every card this system makes is an open shift, and
+        v1 refuses those with "can't edit root open shift" whatever the open-spot
+        count. `shiftId`, not `id`, and only the half of the compound id before
+        the colon. No openSpots: "not supported in V1 update". None of that is
+        documented; shift_update_probe established it on 2026-09-30 and confirmed
+        on 2026-10-06 that startTime, endTime and jobId move too, not just colour.
+
+        The card is sent back WHOLE with those fields replaced, the way job_share
+        writes a Job back, because PUT REPLACES and a field left out is a field
+        volunteered for deletion. That is how a crew's note or an added task
+        survives a card being moved.
+        """
+        sid = self.update_id(shift)
+        if not sid:
+            raise ConnecteamError("cannot update a card with no id")
+        body = {k: v for k, v in shift.items() if k not in self.NOT_ON_UPDATE}
+        body.update(fields)
+        body["shiftId"] = sid
+        # The standing rule applies to an update exactly as to a create: a card
+        # must never come back with somebody on it.
+        assert_unassigned([body])
+        return self._request(
+            "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts", body=[body])
+
+    def apply_card_plan(self, scheduler_id: str, updates, greys, stale_color=None,
+                        live: bool = False, job_names=None) -> tuple:
+        """Carry out the move/recolour half of a plan. (done, failed).
+
+        Creates are left to create_shifts, which already knows how to batch them.
+        """
+        acts = [(s, f, d) for s, f, d in updates]
+        for s in greys:
+            acts.append((s, {"color": stale_color},
+                         {"color": (s.get("color"), stale_color)}))
+        if not acts:
+            print(f"   scheduler {scheduler_id}: no card on the board needs "
+                  f"moving or recolouring.")
+            return [], []
+
+        n_move = sum(1 for _s, _f, d in acts
+                     if "startTime" in d or "jobId" in d)
+        n_grey = len(greys)
+        verb = "WOULD change" if not live else "changing"
+        print(f"   scheduler {scheduler_id}: {verb} {len(acts)} card(s) "
+              f"({n_move} moved, {n_grey} no booking claims any more)"
+              + ("." if live else ". Nothing was sent."))
+        for shift, fields, diff in acts:
+            how = ", ".join(f"{k} {a} -> {b}" for k, (a, b) in sorted(diff.items()))
+            shown = dict(shift)
+            shown.update(fields)
+            print(f"     {_fmt(shown, job_names)}")
+            print(f"       {how}")
+        if not live:
+            return [], []
+
+        done, failed = [], []
+        for shift, fields, _diff in acts:
+            try:
+                self.update_shift(scheduler_id, shift, fields)
+            except ConnecteamError as e:
+                print(f"     !! {self.update_id(shift)}: {str(e)[:150]}")
+                failed.append(shift)
+                continue
+            done.append((shift, fields))
+
+        # Read the board back. An accepted request is not a changed card -- the
+        # Sheets half of this project lost days to that distinction, and a POST in
+        # shift_update_probe returned 200 and did nothing at all.
+        lo = min(int(s.get("startTime") or 0) for s, _f in done) - 86400 if done else 0
+        hi = max(int(s.get("endTime") or 0) for s, _f in done) + 86400 if done else 0
+        after = {str(x.get("id")): x for x in
+                 (self.existing_shifts(scheduler_id, lo, hi) if done else [])}
+        stuck = []
+        for shift, fields in done:
+            got = after.get(str(shift.get("id")))
+            if got is None:
+                stuck.append((shift, "vanished from the board"))
+                continue
+            for k, v in fields.items():
+                a, b = got.get(k), v
+                same = (int(a or 0) == int(b or 0)) if k in ("startTime", "endTime")                     else str(a or "").upper() == str(b or "").upper()
+                if not same:
+                    stuck.append((shift, f"{k} is still {a!r}, wanted {b!r}"))
+                    break
+        print(f"   scheduler {scheduler_id}: {len(done) - len(stuck)} of "
+              f"{len(acts)} card(s) changed, confirmed by reading the board back.")
+        if stuck:
+            print(f"   !! {len(stuck)} card(s) were ACCEPTED but did not change:")
+            for shift, why in stuck:
+                print(f"      {self.update_id(shift)}: {why}")
+        return done, failed + [s for s, _w in stuck]
+
     def recolour_shift(self, scheduler_id: str, shift: dict, color: str) -> dict:
         """Repaint ONE existing card. Returns the response; caller verifies.
 
@@ -270,111 +367,7 @@ class ConnecteamClient:
         writes a Job back, because this is a replace and anything left out is a
         field volunteered for deletion.
         """
-        sid = self.update_id(shift)
-        if not sid:
-            raise ConnecteamError("cannot recolour a card with no id")
-        body = {k: v for k, v in shift.items() if k not in self.NOT_ON_UPDATE}
-        body["shiftId"] = sid
-        body["color"] = color
-        # The standing rule applies to an update exactly as it does to a create:
-        # a card must not come back with somebody on it.
-        assert_unassigned([body])
-        return self._request(
-            "PUT", f"/scheduler/v2/schedulers/{scheduler_id}/shifts", body=[body])
-
-    def reconcile_colours(self, scheduler_id: str, wanted: list[dict],
-                          lo: int, hi: int, live: bool = False, job_names=None,
-                          stale_color: str | None = None,
-                          our_titles=()) -> list[tuple]:
-        """Repaint the board so it matches the sheet. [(shift, was, now)] repainted.
-
-        Two things create_shifts structurally cannot do, and they are the same
-        operation once you look at them:
-
-          * a card ALREADY on the board whose colour has since changed -- its
-            booking was cancelled after the card was made. create_shifts sees it
-            as "already there" and skips it, so it keeps the colour it was born.
-          * a card on the board that the sheet no longer wants at all. The
-            booking did not get struck, it VANISHED. Nothing ever looked for
-            these, so they sat on the board for ever.
-
-        `lo`/`hi` bound the reconcile and are passed in rather than derived from
-        `wanted`: they must be the push window exactly. Derived from `wanted`
-        they would collapse to nothing when the sheet is empty for a stretch, and
-        every card in the gap would survive as a ghost.
-
-        `our_titles` is the safety rail on the stale half. Only cards whose title
-        is one of ours can be greyed. The team create their own cards on these
-        boards, carrying the property in the title, and repainting one of those
-        would be us editing their schedule.
-        """
-        on_board: dict = {}
-        for existing in self.existing_shifts(scheduler_id, lo, hi):
-            on_board.setdefault(_shift_key(existing), existing)
-        want_by_key = {_shift_key(w): w for w in wanted}
-
-        todo = []
-        for key, existing in on_board.items():
-            was = str(existing.get("color") or "")
-            want = want_by_key.get(key)
-            if want is not None:
-                now = str(want.get("color") or "")
-            elif stale_color and str(existing.get("title") or "") in our_titles:
-                # The sheet no longer has this booking at all.
-                now = stale_color
-            else:
-                continue                   # not ours, or nothing to say about it
-            if not now or was.upper() == now.upper():
-                continue
-            todo.append((existing, was, now))
-
-        stale_n = sum(1 for e, _w, _n in todo if _shift_key(e) not in want_by_key)
-        if not todo:
-            print(f"   scheduler {scheduler_id}: every card in the window is "
-                  f"already the right colour.")
-            return []
-
-        verb = "WOULD repaint" if not live else "repainting"
-        print(f"   scheduler {scheduler_id}: {verb} {len(todo)} card(s) "
-              f"({stale_n} no longer in the sheet at all)"
-              + ("." if live else ". Nothing was sent."))
-        if not live:
-            for existing, was, now in todo:
-                tag = "GONE " if _shift_key(existing) not in want_by_key else "     "
-                print(f"     {tag}{was} -> {now}   "
-                      f"{_fmt(dict(existing, color=now), job_names)}")
-            return []
-
-        done = []
-        for existing, was, now in todo:
-            tag = "GONE " if _shift_key(existing) not in want_by_key else "     "
-            try:
-                self.recolour_shift(scheduler_id, existing, now)
-            except ConnecteamError as e:
-                print(f"     !! could not repaint {self.update_id(existing)}: "
-                      f"{str(e)[:160]}")
-                continue
-            done.append((existing, was, now))
-            print(f"     {tag}{was} -> {now}   "
-                  f"{_fmt(dict(existing, color=now), job_names)}")
-
-        # Read the board back. An accepted request is not a changed card -- the
-        # Sheets half of this project lost days to exactly that distinction, and
-        # a POST in shift_update_probe returned 200 and did nothing at all.
-        after = {}
-        for s2 in self.existing_shifts(scheduler_id, lo, hi):
-            after.setdefault(_shift_key(s2), s2)
-        stuck = [(e, was, now) for e, was, now in done
-                 if str((after.get(_shift_key(e)) or {}).get("color", "")).upper()
-                 != now.upper()]
-        print(f"   scheduler {scheduler_id}: repainted {len(done) - len(stuck)} "
-              f"of {len(todo)} card(s), confirmed by reading the board back.")
-        if stuck:
-            print(f"   !! {len(stuck)} card(s) were ACCEPTED but did not change "
-                  f"colour on the board:")
-            for e, was, now in stuck:
-                print(f"      {self.update_id(e)} still {was}, wanted {now}")
-        return [t for t in done if t not in stuck]
+        return self.update_shift(scheduler_id, shift, {"color": color})
 
     def create_shifts(self, scheduler_id: str, shifts: list[dict],
                       live: bool = False, skip_existing: bool = True,
