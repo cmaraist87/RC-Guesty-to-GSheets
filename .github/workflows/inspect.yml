@@ -30,6 +30,7 @@ on:
           - color_palette    # which card colours Connecteam accepts
           - job_create        # CREATE the Jobs the TEST board is missing
           - job_share        # can a Job be added to a second board? (our Job only)
+          - job_rename       # strip the Guesty V2 from Job names (ACCOUNT-WIDE)
           - job_share_run    # ADD the test board to existing Jobs (reversible)
           - shift_shape      # WRITES probe shifts to the TEST board to learn the API
           - shift_update     # can a card's COLOUR be changed in place? (test board)
@@ -229,6 +230,13 @@ jobs:
               BOARD=""
               if [ -n "${{ inputs.property }}" ]; then BOARD="--board ${{ inputs.property }} --market-board"; fi
               python -u job_share.py --city "${{ inputs.city }}" $MONTH $BOARD $EXTRA $CONFIRM ;;
+            job_rename)
+              # `property` is the board whose Jobs to list. The RENAME itself is
+              # account-wide -- a Job is one record with a list of boards -- so
+              # this cannot be trialled on one board and judged there.
+              CONFIRM=""
+              if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
+              python -u job_rename.py --board "${{ inputs.property }}" $CONFIRM ;;
             job_share)
               CONFIRM=""
               if [ "${{ inputs.write }}" = "true" ]; then CONFIRM="--confirm"; fi
