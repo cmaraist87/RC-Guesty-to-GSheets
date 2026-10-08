@@ -190,7 +190,10 @@ jobs:
               # code withholds. That is the right place for the rule -- an option
               # is one dispatch away from being picked, a named set is an edit.
               if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-MARKET-BOARD-LIVE" ]; then
-                echo "::warning::Writing to ${{ inputs.city }}'"'"'s OWN board. Crews see this."
+                # No apostrophe. An escaped one here broke the whole shell
+                # block on 2026-10-07 -- the generated script failed to parse
+                # before any Python ran -- and it is not worth a possessive.
+                echo "::warning::Writing to the OWN board for ${{ inputs.city }}. Crews see this."
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS --live
               elif [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
                 echo "::warning::Writing to the TEST board (Chris Test)."
