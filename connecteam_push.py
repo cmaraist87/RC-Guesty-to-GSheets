@@ -158,8 +158,8 @@ def main(argv=None) -> int:
     if grey_cancellations:
         print(f"Cancelled bookings go {CANCELLED_COLOR} on board {target_board}.")
     else:
-        print(f"Board {target_board} is not in CANCELLED_COLOR_BOARDS, so "
-              f"cancellations are NOT greyed there.")
+        print(f"Board {target_board} is not in CANCELLED_COLOR_BOARDS, so a "
+              f"cancelled booking keeps the colour a live one would have.")
 
     # One tab at a time, because strikethrough positions are per worksheet. A
     # concatenated frame would need its indices remapped, and an off-by-one there
@@ -212,8 +212,9 @@ def main(argv=None) -> int:
                 prop = str(r.get("Property", "")).strip()
                 if prop:
                     unmatched.add(prop)
-        for row, code, payload in cards_for_tab(mine, struck, active,
-                                                job_index=job_index):
+        for row, code, payload in cards_for_tab(
+                mine, struck, active, job_index=job_index,
+                grey_cancellations=grey_cancellations):
             if scheduler_for(row.get("City", "")) != board:
                 continue
             if not (lo <= int(payload["startTime"]) <= hi):

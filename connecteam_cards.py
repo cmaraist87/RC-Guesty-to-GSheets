@@ -79,15 +79,28 @@ def is_turnover(row) -> bool:
     return str(row.get("T/O", "")).strip().lower() == "yes"
 
 
-def colour_for(row, active: dict) -> str:
-    """The colour this row's card should carry, by the rule above."""
+def colour_for(row, active: dict, grey_cancellations: bool = True) -> str:
+    """The colour this row's card should carry, by the rule above.
+
+    `grey_cancellations=False` means a cancelled booking keeps the colour a live
+    one would have. It exists because the choice of which boards grey their
+    cancellations is Chris', held in connecteam_map.CANCELLED_COLOR_BOARDS -- and
+    because that gate had stopped reaching this function.
+
+    It is a parameter rather than a lookup so the caller cannot forget it
+    silently: between 2026-10-06 and 2026-10-08 the gate controlled only the
+    "removed booking" path, this function greyed regardless, and a live Savannah
+    push printed "cancellations are NOT greyed there" while greying six cards.
+    """
     code = code_of(row)
     if code and not active.get(code, False):
-        return CANCELLED_COLOR
+        return CANCELLED_COLOR if grey_cancellations else (
+            TURNOVER_COLOR if is_turnover(row) else STANDARD_COLOR)
     return TURNOVER_COLOR if is_turnover(row) else STANDARD_COLOR
 
 
-def cards_for_tab(frame, struck, active, job_index=None, clean_hours=None):
+def cards_for_tab(frame, struck, active, job_index=None, clean_hours=None,
+                  grey_cancellations: bool = True):
     """[(row, code, payload)] for one tab. Skips rows that are not a job.
 
     A struck row whose code is live elsewhere is DROPPED, not coloured: that row
@@ -109,7 +122,7 @@ def cards_for_tab(frame, struck, active, job_index=None, clean_hours=None):
         payload = shift_for_row(row, **kwargs)
         if payload is None:
             continue                      # no check-out, or no Job: not a card
-        payload["color"] = colour_for(row, active)
+        payload["color"] = colour_for(row, active, grey_cancellations)
         out.append((row, code, payload))
     return out
 

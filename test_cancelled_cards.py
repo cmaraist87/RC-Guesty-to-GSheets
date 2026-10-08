@@ -256,6 +256,57 @@ def test_an_update_refuses_a_card_somebody_is_on():
         raise AssertionError("an assigned card was NOT refused")
 
 
+def test_the_board_gate_actually_reaches_the_colour():
+    """The regression of 2026-10-08, pinned.
+
+    CANCELLED_COLOR_BOARDS is Chris' choice of which boards grey their
+    cancellations. Between 2026-10-06 and 2026-10-08 it controlled only the
+    "removed booking" path: the colour of a CANCELLED booking came from
+    colour_for, which had no gate, so a live Savannah push printed "cancellations
+    are NOT greyed there" and greyed six cards anyway.
+
+    A log line asserting the opposite of what the code did is worse than either
+    behaviour on its own, which is why this is a test and not a comment.
+    """
+    from connecteam_cards import cards_for_tab, colour_for
+    row = {"Confirmation Code": "HMDEAD", "T/O": ""}
+    dead = {"HMDEAD": False}
+    assert colour_for(row, dead, True) == CANCELLED_COLOR
+    assert colour_for(row, dead, False) == STANDARD_COLOR, (
+        "with the gate shut a cancelled booking must look like a live one; "
+        "that is what 'not greyed there' means")
+
+    to = {"Confirmation Code": "HMDEAD", "T/O": "yes"}
+    assert colour_for(to, dead, False) == TURNOVER_COLOR
+    assert colour_for(to, dead, True) == CANCELLED_COLOR
+    print("OK: the gate reaches the cancelled colour, both ways")
+
+
+def test_the_gate_travels_all_the_way_through_cards_for_tab():
+    """Checked at the level the push calls, not just the leaf function -- the bug
+    was a parameter that existed and was never passed."""
+    import pandas as pd
+    from connecteam_cards import cards_for_tab
+    frame = pd.DataFrame([{"Confirmation Code": "HMD", "Property": "X",
+                           "City": "Austin", "Date": "2026-10-20",
+                           "Check-out Time": "11:00 AM", "T/O": ""}])
+    active = {"HMD": False}            # cancelled
+    on = cards_for_tab(frame, {0}, active, grey_cancellations=True)
+    off = cards_for_tab(frame, {0}, active, grey_cancellations=False)
+    assert on[0][2]["color"] == CANCELLED_COLOR, on[0][2]["color"]
+    assert off[0][2]["color"] == STANDARD_COLOR, off[0][2]["color"]
+    print("OK: cards_for_tab honours the gate it is given")
+
+
+def test_the_default_is_to_grey():
+    """A caller that says nothing gets greying, because a cancelled booking shown
+    as live work is the dangerous direction to fail in."""
+    from connecteam_cards import colour_for
+    row = {"Confirmation Code": "HMD", "T/O": ""}
+    assert colour_for(row, {"HMD": False}) == CANCELLED_COLOR
+    print("OK: greying is the default; the gate has to be shut deliberately")
+
+
 if __name__ == "__main__":
     test_a_cancelled_clean_is_light_gray()
     test_cancelled_beats_turnover()
@@ -272,4 +323,7 @@ if __name__ == "__main__":
     test_the_update_sends_ONLY_what_changed()
     test_a_move_sends_both_times_and_the_property()
     test_an_update_refuses_a_card_somebody_is_on()
+    test_the_board_gate_actually_reaches_the_colour()
+    test_the_gate_travels_all_the_way_through_cards_for_tab()
+    test_the_default_is_to_grey()
     print("\nALL CANCELLED-CARD TESTS PASSED")
