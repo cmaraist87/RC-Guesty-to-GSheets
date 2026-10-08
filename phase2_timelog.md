@@ -86,11 +86,13 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.25 | **[reliability]** Closed the hole the first change opened. Our green title is now identical to four of the team's Austin cards, so the title half of the two-test ownership rail stopped separating us from them and left colour alone -- a crew tinting a card green would have been enough to lose it. A market board now adopts nothing by slot: the only cards it can move, recolour or grey are ones this system created and recorded in its own map, which is a harder guarantee than the two tests gave and costs nothing. The grey pass answers to the same evidence, because a card we will not move is a card we must not repaint. | ✅ |
 
-**Total to date: 31.25 h**
+| 2026-10-07 | 0.25 | **Austin widened to the full 45-day window.** 63 cards created, 63 of 63, on top of the 4 already there and correct; nothing moved, nothing recoloured, nothing greyed, and the team's 6 cards untouched for the fourth verification running. Board reads 49 green / 18 blue for ours plus their 6, with colour and title corresponding exactly. Worth recording what the board showed: the team had hand-carded only SIX cleans across the next six weeks, so the 67 are overwhelmingly new coverage rather than duplicates of their work -- the overlap Chris is taking to the team is bounded by those six, not by the 67. | ✅ |
+
+**Total to date: 31.5 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 14.75 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 15.0 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -116,6 +118,7 @@ before.
 | 2026-10-07 **Austin live** -- first crew-board cards | 0.75 |
 | 2026-10-07 card title and Job field changes | 0.75 |
 | 2026-10-07 market boards adopt nothing **[reliability]** | 0.25 |
+| 2026-10-07 Austin widened to 45 days | 0.25 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
