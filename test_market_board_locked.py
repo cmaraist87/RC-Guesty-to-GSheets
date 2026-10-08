@@ -69,23 +69,47 @@ def test_a_signed_off_market_is_not_refused_by_the_gate():
     print(f"OK: {sorted(LIVE_MARKETS)} passes the gate, as signed off")
 
 
-def test_the_workflow_offers_no_way_to_ask_for_a_market_write():
-    """A rule that lives in a workflow input is one dispatch away from being
-    picked. Every --live in either workflow is bolted to --test on the same line,
-    so the only route to a market board is a deliberate command, not a dispatch."""
+def test_the_workflow_cannot_grant_what_the_code_withholds():
+    """The workflow DOES offer a live-market option now, and that is fine.
+
+    This test used to assert the option could not exist, which was right while no
+    market was signed off and wrong afterwards -- it would have blocked the very
+    thing Chris authorised. The protection was never the absence of the option;
+    it is LIVE_MARKETS in code, which an input cannot reach past. The per-city
+    refusals above are what actually prove that.
+
+    What still has to hold here: the live option is not the DEFAULT, so it cannot
+    be chosen by leaving the form alone, and every other route passes --test.
+    """
     for path in (WORKFLOW, NIGHTLY):
         yml = io.open(path, encoding="utf-8").read()
-        assert "WRITE-TO-MARKET-BOARD-LIVE" not in yml, \
-            f"the market-write option is back in {path}"
         for line in yml.splitlines():
             bare = line.strip()
             if bare.startswith("#"):
-                continue        # a comment is not a command, and the nightly's
-                                # comments discuss --live at length
-            if "connecteam_push.py" in bare and "--live" in bare:
-                assert "--test" in bare, \
-                    f"--live without --test in {path}: {bare}"
-    print("OK: neither workflow can ask for a market write; every --live has --test")
+                continue        # a comment is not a command, and these files
+                                # discuss --live at length
+            if "connecteam_push.py" not in bare or "--live" not in bare:
+                continue
+            if "WRITE-TO-MARKET-BOARD-LIVE" in yml and path == WORKFLOW                     and "--test" not in bare:
+                continue        # the one deliberate market route
+            assert "--test" in bare, f"--live without --test in {path}: {bare}"
+
+    # The nightly has no market route at all: every push it makes is --test.
+    nightly = io.open(NIGHTLY, encoding="utf-8").read()
+    for line in nightly.splitlines():
+        bare = line.strip()
+        if bare.startswith("#") or "connecteam_push.py" not in bare:
+            continue
+        if "--live" not in bare:
+            continue        # not a push: the version guard calls it with --help
+        assert "--test" in bare, f"the nightly can reach a crew board: {bare}"
+
+    import yaml
+    d = yaml.safe_load(io.open(WORKFLOW, encoding="utf-8").read())
+    cw = d[True]["workflow_dispatch"]["inputs"]["connecteam_write"]
+    assert cw["default"] != "WRITE-TO-MARKET-BOARD-LIVE",         "a live crew-board write must never be the default choice"
+    print("OK: the live option exists, is not the default, and the nightly has "
+          "no market route")
 
 
 def test_the_test_board_is_not_a_market_board():
@@ -112,7 +136,7 @@ if __name__ == "__main__":
     test_only_the_signed_off_markets_are_live()
     test_every_market_that_is_not_signed_off_is_refused()
     test_a_signed_off_market_is_not_refused_by_the_gate()
-    test_the_workflow_offers_no_way_to_ask_for_a_market_write()
+    test_the_workflow_cannot_grant_what_the_code_withholds()
     test_the_test_board_is_not_a_market_board()
     test_greying_is_still_test_board_only()
     print("")

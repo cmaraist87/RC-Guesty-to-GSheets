@@ -67,6 +67,7 @@ on:
           - preview
           - preview-test-board
           - WRITE-TO-TEST-BOARD
+          - WRITE-TO-MARKET-BOARD-LIVE
       city:
         description: "connecteam ONLY: which market to preview"
         required: false
@@ -180,9 +181,18 @@ jobs:
               # This option briefly existed on 2026-09-21 and 38 cards reached
               # the Austin board. They were deleted the same day. The lesson is
               # in the shape of the guard, not in a comment: there is no
-              # combination of inputs to this workflow that writes to a market
-              # board, and the script would refuse it even if there were.
-              if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
+              # board, and the script refused it regardless.
+              #
+              # Since 2026-10-07 there IS such an option, because Chris signed
+              # Austin off. What protects the rest is unchanged and is not here:
+              # connecteam_push refuses any city not named in
+              # connecteam_map.LIVE_MARKETS, so this input cannot grant what the
+              # code withholds. That is the right place for the rule -- an option
+              # is one dispatch away from being picked, a named set is an edit.
+              if [ "${{ inputs.connecteam_write }}" = "WRITE-TO-MARKET-BOARD-LIVE" ]; then
+                echo "::warning::Writing to ${{ inputs.city }}'"'"'s OWN board. Crews see this."
+                python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS --live
+              elif [ "${{ inputs.connecteam_write }}" = "WRITE-TO-TEST-BOARD" ]; then
                 echo "::warning::Writing to the TEST board (Chris Test)."
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS --test --live
               elif [ "${{ inputs.connecteam_write }}" = "preview-test-board" ]; then
