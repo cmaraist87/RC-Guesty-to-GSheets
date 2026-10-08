@@ -88,11 +88,17 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.25 | **Austin widened to the full 45-day window.** 63 cards created, 63 of 63, on top of the 4 already there and correct; nothing moved, nothing recoloured, nothing greyed, and the team's 6 cards untouched for the fourth verification running. Board reads 49 green / 18 blue for ours plus their 6, with colour and title corresponding exactly. Worth recording what the board showed: the team had hand-carded only SIX cleans across the next six weeks, so the 67 are overwhelmingly new coverage rather than duplicates of their work -- the overlap Chris is taking to the team is bounded by those six, not by the 67. | ✅ |
 
-**Total to date: 31.5 h**
+| 2026-10-08 | 0.75 | **SAVANNAH LIVE** -- 170 cards on the live Savannah/Thunderbolt board, starting Monday 12 October on Chris' instruction so the days the team had already carded by hand were left alone. In the event there were none: that board held zero cards from the 12th onward, so the duplication being guarded against was not going to happen. Thunderbolt deliberately NOT signed off though it shares the board -- one property, no Job, sends nothing, and a permission granted for no reason is remembered as one that was given. The start date is a FLOOR rather than a fixed date, so it expires once reached instead of shaving a day off the horizon every day for ever. The push also now reports how many CLEANS a missing Job costs, not just how many properties: "21 properties" sounds like a tidy-up, "N cleans are not being sent, silently" is the number that decides whether a board is fit to rely on. | ✅ |
+
+| 2026-10-08 | 0.25 | Read-only report listing every grey card with its confirmation code, property, date and guest, so "leave the greys if they are truly cancelled" could be checked against Guesty rather than taken on trust. It counts a booking cancelled only when EVERY row carrying its code is struck and it appears live nowhere -- a struck row alone proves nothing, because the sheet strikes a row for a move as well. | ✅ |
+
+| 2026-10-08 | 0.0 | **ABSORBED -- my error.** The switch controlling which boards grey their cancellations silently stopped reaching the colour when the push was rewritten for booking identity on 2026-10-06. It kept governing the "removed booking" path only, so the live Savannah run printed "cancellations are NOT greyed there" and greyed six cards. Austin had not shown it, having no cancelled booking in its window. Chris then clarified that the restriction had been about staying in the test environment, not about the colour, so the switch is gone rather than repaired -- a switch that is always open is one more thing to break, and this one failed by reporting the opposite of what it did. The first version of the verification report had the same shape of fault: it listed sixteen grey cards on a board holding six, having skipped the check that decides whether a card exists at all. | ✅ |
+
+**Total to date: 32.5 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 15.0 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 16.0 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -119,6 +125,8 @@ before.
 | 2026-10-07 card title and Job field changes | 0.75 |
 | 2026-10-07 market boards adopt nothing **[reliability]** | 0.25 |
 | 2026-10-07 Austin widened to 45 days | 0.25 |
+| 2026-10-08 **Savannah live** -- 170 cards from 12 Oct | 0.75 |
+| 2026-10-08 cancelled-card verification report | 0.25 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
