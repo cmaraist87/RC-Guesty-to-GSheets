@@ -76,11 +76,13 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.0 | **ABSORBED -- my error.** The first run of that cleanup wrote all 54 cells one column to the LEFT of Property, into `assigned`, which is a checkbox the team ticks: a 0-based column index was handed to a 1-based column-letter helper. It reported "Merged 54 of 54" and changed nothing it meant to, caught only because the verify re-run still found all 54 rows. Recovered the prior values from the morning's own snapshot artifact -- 25 provably FALSE, none TRUE, 29 with no record -- restored all 54 to a real boolean FALSE, then applied the merge to the right column and confirmed both. `bad_units.py` carried the identical bug and was fixed too. Added `sheet_header`, which prints every column with the letter it actually lives in, because the two conventions were nowhere written down and that is what made the fault invisible. | ✅ |
 
-**Total to date: 29.0 h**
+| 2026-10-07 | 0.5 | **The two things that were unproven, proven on the test board.** (1) The UNDO actually run for the first time: deleted 14 cards, let the push recreate them and take its snapshot, then restored from that snapshot -- 14 of 14 removed, confirmed by reading the board back, and it identified exactly the cards the push had created and nothing else. (2) A card going GREEN to GREY because its booking was cancelled, which the sheet cannot produce on its own because cancellations already have grey cards; staged with a new test-board-only paint tool and watched the push correct both cards. That exposed one more fault on the way: adoption keyed on the card's TITLE, which a booking changes when a clean becomes a turnover, so such a card was greyed as 'no booking claims this' and a second one created beside it. Keyed on property and instant now; one update instead of a ghost and a duplicate. Board left consistent at 100 cards -- 78 Clean (76 green, 2 grey) and 22 Turnover, all blue. | ✅ |
+
+**Total to date: 29.5 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 12.5 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 13.0 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -102,6 +104,7 @@ before.
 | 2026-10-07 snapshot, undo, selectable window | 0.75 |
 | 2026-10-07 nightly automation **[reliability]** | 0.5 |
 | 2026-10-07 1401 Carondelet merged workbook-wide | 0.5 |
+| 2026-10-07 undo and grey transition proven live | 0.5 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
