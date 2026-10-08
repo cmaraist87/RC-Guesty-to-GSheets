@@ -25,7 +25,7 @@ from connecteam_client import ConnecteamClient, ConnecteamError
 from connecteam_cards import (booking_activity, cards_for_tab, plan,
                               read_map, write_map, write_snapshot)
 from connecteam_jobs import build_index, resolve, usable
-from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
+from connecteam_map import (CANCELLED_COLOR, GREY_CANCELLATIONS_EVERYWHERE,
                             CITY_SCHEDULERS, LIVE_MARKETS, OUR_TITLES, STANDARD_COLOR,
                             TEST_SCHEDULER, TURNOVER_COLOR,
                             WINDOW_DAYS, months_in_window, scheduler_for,
@@ -154,12 +154,11 @@ def main(argv=None) -> int:
           f"{len(usable(all_jobs, board_for_jobs))} usable on board "
           f"{board_for_jobs}; {len(job_index)} distinct name(s).")
 
-    grey_cancellations = target_board in CANCELLED_COLOR_BOARDS
-    if grey_cancellations:
-        print(f"Cancelled bookings go {CANCELLED_COLOR} on board {target_board}.")
-    else:
-        print(f"Board {target_board} is not in CANCELLED_COLOR_BOARDS, so a "
-              f"cancelled booking keeps the colour a live one would have.")
+    # Every board, live ones included -- Chris, 2026-10-08. See
+    # GREY_CANCELLATIONS_EVERYWHERE for why this is no longer a per-board set.
+    grey_cancellations = GREY_CANCELLATIONS_EVERYWHERE
+    print(f"Cancelled bookings go {CANCELLED_COLOR} on board {target_board}, as "
+          f"on every board.")
 
     # One tab at a time, because strikethrough positions are per worksheet. A
     # concatenated frame would need its indices remapped, and an off-by-one there

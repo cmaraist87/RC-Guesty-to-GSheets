@@ -128,14 +128,21 @@ TURNOVER_COLOR = "#85A6DA"     # light royal blue: a turnover, same-day arrival
 STANDARD_COLOR = "#91B282"     # palest green: an ordinary departure clean
 CANCELLED_COLOR = "#969696"    # light gray: the booking was cancelled
 
-# CHRIS TEST ONLY, for now. Asked for on 2026-09-30 in those words.
+# A cancelled booking is grey on EVERY board, live ones included.
 #
-# A separate gate from the card lock in connecteam_push, and deliberately so.
-# That lock says WHICH BOARDS may receive cards at all; this says which boards
-# get the cancelled colour once they can. When a market board is eventually
-# signed off for cards, greying cancellations there is a second decision, and
-# this set is where it gets made -- not something that arrives with the first.
-CANCELLED_COLOR_BOARDS = frozenset({TEST_SCHEDULER})
+# This was once a named set of boards, "Chris Test only, for now", from
+# 2026-09-30. Chris clarified on 2026-10-08 that the restriction was about
+# staying in the test environment until the integration was proven -- not about
+# the colour. Once Austin and Savannah went live the set had outlived its reason,
+# and it had already broken: it silently stopped reaching the colour at all when
+# the push was rewritten for booking identity, so a live Savannah run printed
+# "cancellations are NOT greyed there" while greying six cards.
+#
+# There is no gate now, deliberately. A switch that is always open is one more
+# thing to break, and the failure it had was to report the opposite of what it
+# did. A cancelled booking shown as live work sends a cleaner to a job that is
+# not happening; there is no board where that is the right answer.
+GREY_CANCELLATIONS_EVERYWHERE = True
 
 # THE SIGN-OFF. Markets whose own board may receive cards.
 #

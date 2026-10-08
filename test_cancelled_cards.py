@@ -26,7 +26,7 @@ Three separate things have to hold, and they fail in different ways:
 import pandas as pd
 
 from connecteam_map import (ALLOWED_COLORS, CANCELLED_COLOR,
-                            CANCELLED_COLOR_BOARDS, CITY_SCHEDULERS,
+                            CITY_SCHEDULERS,
                             STANDARD_COLOR, TEST_SCHEDULER, TURNOVER_COLOR,
                             shift_for_row, shifts_for_rows)
 
@@ -86,8 +86,9 @@ def test_positions_select_the_right_rows():
 
 
 def test_an_empty_position_set_changes_nothing():
-    """The gate's closed state. A board not in CANCELLED_COLOR_BOARDS gets an
-    empty set, and that must behave exactly like the old code."""
+    """shifts_for_rows takes positions, not a board. With none given it must
+    behave exactly as it did before cancellations had a colour at all -- this is
+    the low-level path, still used by the tests that build payloads directly."""
     df = pd.DataFrame([_row(), _row(**{"T/O": "yes"})])
     for empty in (frozenset(), set()):
         got = [p["color"] for _r, p in shifts_for_rows(df, cancelled_pos=empty)]
@@ -95,14 +96,19 @@ def test_an_empty_position_set_changes_nothing():
     print("OK: an empty position set is indistinguishable from before")
 
 
-def test_the_gate_is_the_test_board_only():
-    """"only in Chris Test for now" -- 2026-09-30."""
-    assert CANCELLED_COLOR_BOARDS == frozenset({TEST_SCHEDULER}), CANCELLED_COLOR_BOARDS
-    for city, board in CITY_SCHEDULERS.items():
-        assert str(board) not in CANCELLED_COLOR_BOARDS, (
-            f"{city}'s board {board} would grey cancellations; Chris said Chris "
-            f"Test only")
-    print(f"OK: grey cancellations are gated to {TEST_SCHEDULER} and no market board")
+def test_cancelled_is_grey_on_every_board():
+    """2026-10-08. The per-board set is gone: Chris' "Chris Test only" was about
+    staying in the test environment until the integration was proven, not about
+    the colour, and it had silently stopped reaching the colour anyway."""
+    from connecteam_map import GREY_CANCELLATIONS_EVERYWHERE
+    assert GREY_CANCELLATIONS_EVERYWHERE is True
+    from connecteam_cards import colour_for
+    for city, board in sorted(CITY_SCHEDULERS.items()):
+        # Nothing about a board changes the answer any more. Stated as a loop so
+        # a reintroduced per-board rule fails here rather than in production.
+        assert colour_for({"Confirmation Code": "Z", "T/O": ""},
+                          {"Z": False}) == CANCELLED_COLOR, city
+    print(f"OK: cancelled is grey for all {len(CITY_SCHEDULERS)} markets")
 
 
 def test_the_palette_is_the_whole_palette():
@@ -259,8 +265,7 @@ def test_an_update_refuses_a_card_somebody_is_on():
 def test_the_board_gate_actually_reaches_the_colour():
     """The regression of 2026-10-08, pinned.
 
-    CANCELLED_COLOR_BOARDS is Chris' choice of which boards grey their
-    cancellations. Between 2026-10-06 and 2026-10-08 it controlled only the
+    Between 2026-10-06 and 2026-10-08 it controlled only the
     "removed booking" path: the colour of a CANCELLED booking came from
     colour_for, which had no gate, so a live Savannah push printed "cancellations
     are NOT greyed there" and greyed six cards anyway.
@@ -314,7 +319,7 @@ if __name__ == "__main__":
     test_the_three_colours_are_distinguishable()
     test_positions_select_the_right_rows()
     test_an_empty_position_set_changes_nothing()
-    test_the_gate_is_the_test_board_only()
+    test_cancelled_is_grey_on_every_board()
     test_the_palette_is_the_whole_palette()
     test_every_colour_we_send_is_one_the_api_named()
     test_a_cancelled_card_is_still_unassigned()

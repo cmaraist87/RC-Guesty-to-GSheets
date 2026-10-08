@@ -84,8 +84,9 @@ def colour_for(row, active: dict, grey_cancellations: bool = True) -> str:
 
     `grey_cancellations=False` means a cancelled booking keeps the colour a live
     one would have. It exists because the choice of which boards grey their
-    cancellations is Chris', held in connecteam_map.CANCELLED_COLOR_BOARDS -- and
-    because that gate had stopped reaching this function.
+    cancellations was once Chris', held per board -- and because that gate had
+    stopped reaching this function. It is now always on; the parameter remains so
+    a caller must still state what it wants.
 
     It is a parameter rather than a lookup so the caller cannot forget it
     silently: between 2026-10-06 and 2026-10-08 the gate controlled only the

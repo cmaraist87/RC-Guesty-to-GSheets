@@ -129,19 +129,25 @@ def test_the_test_board_is_not_a_market_board():
     print(f"OK: the test board {TEST_SCHEDULER} is not any market's board")
 
 
-def test_greying_is_still_test_board_only():
-    """Signing a market off for CARDS does not sign it off for grey
-    cancellations. Chris asked for those on Chris Test "for now", and that is a
-    separate decision that must not arrive with the first one."""
-    from connecteam_map import CANCELLED_COLOR_BOARDS
-    assert CANCELLED_COLOR_BOARDS == frozenset({TEST_SCHEDULER}), \
-        CANCELLED_COLOR_BOARDS
-    for city in sorted(LIVE_MARKETS):
-        board = CITY_SCHEDULERS[city]
-        assert str(board) not in CANCELLED_COLOR_BOARDS, (
-            f"{city} is live for cards AND would grey cancellations; those are "
-            f"two decisions")
-    print("OK: a live market still does not grey cancellations")
+def test_a_cancelled_booking_is_grey_on_a_live_board_too():
+    """Reversed on 2026-10-08. Chris: "Gray is for live too. I only wanted to
+    stay in the test environment until we proved success."
+
+    This used to assert the opposite -- that only Chris Test greyed
+    cancellations. That restriction was about the rollout, not the colour, and it
+    had already failed in the worst way: it silently stopped reaching the colour
+    when the push was rewritten, so a live run reported not greying while greying
+    six cards. There is no per-board gate now, and this is what holds that.
+    """
+    from connecteam_cards import colour_for
+    from connecteam_map import (CANCELLED_COLOR, GREY_CANCELLATIONS_EVERYWHERE,
+                                STANDARD_COLOR)
+    assert GREY_CANCELLATIONS_EVERYWHERE is True
+    dead = {"HMX": False}
+    row = {"Confirmation Code": "HMX", "T/O": ""}
+    assert colour_for(row, dead) == CANCELLED_COLOR
+    assert colour_for(row, {"HMX": True}) == STANDARD_COLOR
+    print("OK: a cancelled booking is grey on every board, live included")
 
 
 if __name__ == "__main__":
@@ -151,6 +157,6 @@ if __name__ == "__main__":
     test_a_signed_off_market_is_not_refused_by_the_gate()
     test_the_workflow_cannot_grant_what_the_code_withholds()
     test_the_test_board_is_not_a_market_board()
-    test_greying_is_still_test_board_only()
+    test_a_cancelled_booking_is_grey_on_a_live_board_too()
     print("")
     print("ALL MARKET-BOARD-LOCK TESTS PASSED")
