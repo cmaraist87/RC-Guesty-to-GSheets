@@ -151,7 +151,10 @@ def test_a_moved_card_is_put_back_on_both_times():
 def test_the_restore_shares_the_push_s_definition_of_ours():
     """If these two ever disagree, the undo either misses our own cards or
     reaches into the team's. Same constants, asserted here."""
-    assert OUR_TITLES == (STANDARD_TITLE, "Turnover"), OUR_TITLES
+    assert STANDARD_TITLE in OUR_TITLES and "Turnover" in OUR_TITLES, OUR_TITLES
+    # The old name counts too, or the undo would not recognise a card it made
+    # last week as its own.
+    assert "Clean" in OUR_TITLES, OUR_TITLES
     assert set(OUR_COLORS) == {STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR}
     print("OK: the undo uses the same titles and colours as the push")
 

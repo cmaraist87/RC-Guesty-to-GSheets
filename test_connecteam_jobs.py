@@ -35,20 +35,43 @@ def test_one_match_is_taken():
     print("OK: an unambiguous property takes its Job")
 
 
-def test_the_highest_version_wins():
-    """The team's rule, 2026-09-21: a V2 is the current revision of a listing."""
-    index = build_index(jobs(("old", "6504 Porter A"), ("new", "6504 Porter A V2")))
+def test_the_unversioned_job_wins():
+    """Reversed on 2026-10-07, and the reason is worth keeping.
+
+    It used to be highest-version-wins, on the reading that a V2 is the current
+    revision of a listing. That was a guess made before the team's own Jobs were
+    understood: this account holds TWO Jobs for most addresses -- a clean-named
+    one the CREWS point their own cards at, and a "V2" one. Highest-version put
+    our card on a different Job row from the team's card for the same address,
+    and made the Job field read "1163 webberville A V2" rather than the address.
+
+    Chris asked for just the address. Preferring the unversioned Job gives that
+    and writes to nothing; renaming would have been account-wide and was blocked
+    for 8 of 11 anyway, by the very Jobs the team uses.
+    """
+    index = build_index(jobs(("clean", "6504 Porter A"), ("v2", "6504 Porter A V2")))
     jid, name, why = resolve("6504 Porter A", index)
-    assert (jid, name) == ("new", "6504 Porter A V2"), (jid, name)
-    assert "highest version" in why and "6504 Porter A" in why, why
-    print("OK: V2 beats the original, and the log says what it passed over")
+    assert (jid, name) == ("clean", "6504 Porter A"), (jid, name)
+    assert "no version marker" in why and "6504 Porter A V2" in why, why
+    print("OK: the clean name beats V2, and the log says what it passed over")
 
 
-def test_a_v3_beats_a_v2():
+def test_the_highest_version_still_wins_when_none_is_clean():
+    """The old rule survives as the fallback. Some addresses have only versioned
+    Jobs, and there the newest revision is still the right one."""
+    index = build_index(jobs(("a", "109 Twelve Oaks V1"), ("b", "109 Twelve Oaks V2"),
+                             ("c", "109 Twelve Oaks V3")))
+    jid, _name, why = resolve("109 Twelve Oaks", index)
+    assert jid == "c", jid
+    assert "highest version" in why, why
+    print("OK: with no clean name, the newest revision still wins")
+
+
+def test_a_clean_name_beats_even_a_v3():
     index = build_index(jobs(("a", "109 Twelve Oaks"), ("b", "109 Twelve Oaks V2"),
                              ("c", "109 Twelve Oaks V3")))
-    assert resolve("109 Twelve Oaks", index)[0] == "c"
-    print("OK: the newest revision wins, not merely any revision")
+    assert resolve("109 Twelve Oaks", index)[0] == "a"
+    print("OK: no marker beats any marker, not merely a low one")
 
 
 def test_the_choice_does_not_depend_on_the_order_the_api_answered_in():
@@ -139,8 +162,9 @@ if __name__ == "__main__":
     test_the_comparable_name_ignores_notes_and_versions()
     test_a_version_is_read_off_the_raw_name()
     test_one_match_is_taken()
-    test_the_highest_version_wins()
-    test_a_v3_beats_a_v2()
+    test_the_unversioned_job_wins()
+    test_the_highest_version_still_wins_when_none_is_clean()
+    test_a_clean_name_beats_even_a_v3()
     test_the_choice_does_not_depend_on_the_order_the_api_answered_in()
     test_a_near_miss_is_not_a_match()
     test_an_unmatched_property_is_reported_not_guessed()

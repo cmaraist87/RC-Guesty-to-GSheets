@@ -108,14 +108,29 @@ def resolve(prop: str, index) -> tuple[str | None, str | None, str]:
         return None, None, "no Job on this board matches"
     if len(hits) == 1:
         return hits[0][0], hits[0][1], "one Job matches"
-    # Highest version wins. The name and then the id break the tie, because the
-    # account really does hold two Jobs with ONE name -- 1018 Ferdinand twice --
-    # and a tie settled by whatever order the API answered in would move a
-    # property between Jobs from one morning to the next. The id is arbitrary but
-    # stable, which is the property that matters.
-    best = max(hits, key=lambda h: (version_of(h[1]), h[1], h[0]))
+    # A Job with NO version marker wins, and only then the highest version.
+    #
+    # It used to be highest-version-wins outright, which was a guess made before
+    # the team's own Jobs were understood. This account holds TWO Jobs for most
+    # addresses: a clean-named one the CREWS point their own cards at, and a
+    # "V2" one. Highest-version therefore put our card on a different Job row
+    # from the team's card for the same address, and made the Job field read
+    # "1163 webberville A V2" instead of the address. Chris asked for the address
+    # on 2026-10-07; preferring the unversioned Job gives exactly that and writes
+    # to nothing -- renaming would have been account-wide, and blocked for 8 of
+    # 11 anyway, by the very Jobs the team uses.
+    #
+    # The name and then the id still break the remaining tie, because the account
+    # really does hold two Jobs with ONE name -- 1018 Ferdinand twice -- and a tie
+    # settled by whatever order the API answered in would move a property between
+    # Jobs from one morning to the next. The id is arbitrary but stable, which is
+    # the property that matters.
+    best = max(hits, key=lambda h: (version_of(h[1]) == 0, version_of(h[1]),
+                                    h[1], h[0]))
     others = ", ".join(n for _i, n in hits if n != best[1])
-    return best[0], best[1], f"{len(hits)} matched, took the highest version (over {others})"
+    why = ("took the one with no version marker"
+           if version_of(best[1]) == 0 else "took the highest version")
+    return best[0], best[1], f"{len(hits)} matched, {why} (over {others})"
 
 
 def resolve_all(props, index) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str]]]:

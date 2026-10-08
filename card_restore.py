@@ -43,11 +43,10 @@ import sys
 
 from connecteam_cards import ours, read_snapshot
 from connecteam_client import ConnecteamClient, ConnecteamError, check_api_key
-from connecteam_map import (CANCELLED_COLOR, STANDARD_COLOR, STANDARD_TITLE,
-                            TURNOVER_COLOR, TURNOVER_TITLE)
+from connecteam_map import (CANCELLED_COLOR, OUR_TITLES, STANDARD_COLOR,
+                            TURNOVER_COLOR)
 from sync import load_config, state_store
 
-OUR_TITLES = (STANDARD_TITLE, TURNOVER_TITLE)
 OUR_COLORS = (STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR)
 
 # What a push can change, so what an undo has to put back.

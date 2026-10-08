@@ -231,8 +231,24 @@ INCLUDE_CODES_IN_TITLE = False
 
 # What the title says now that the property lives in the Job field. Connecteam
 # requires a non-empty title, so it carries the KIND of job instead of the place.
-STANDARD_TITLE = "Clean"
+# The crews' own words for an ordinary departure clean. Chris, 2026-10-07: the
+# green cards should read what the team already writes on theirs, which on the
+# Austin board is "sale no entran huespedes" -- the guest leaves and nobody is
+# coming in.
+#
+# The turnover title stays English, also his call. They are not a matched pair
+# on purpose: the Spanish counterpart ("sale entran huespedes") differs from this
+# one by the single word "no", which is easy to misread at a glance on a phone,
+# and the blue cards are the ones it is most costly to misread.
+STANDARD_TITLE = "sale no entran huespedes"
 TURNOVER_TITLE = "Turnover"
+
+# Titles this system has used before. A card we made under an old name is still
+# OURS -- without this, renaming the standard title would orphan every card
+# already on a board: unrecognisable, so never adopted, never corrected, and on
+# the test board greyed as "no booking claims this".
+LEGACY_TITLES = ("Clean",)
+OUR_TITLES = (STANDARD_TITLE, TURNOVER_TITLE) + LEGACY_TITLES
 
 
 

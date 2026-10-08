@@ -26,8 +26,8 @@ from connecteam_cards import (booking_activity, cards_for_tab, plan,
                               read_map, write_map, write_snapshot)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
-                            CITY_SCHEDULERS, LIVE_MARKETS, STANDARD_COLOR, STANDARD_TITLE,
-                            TEST_SCHEDULER, TURNOVER_COLOR, TURNOVER_TITLE,
+                            CITY_SCHEDULERS, LIVE_MARKETS, OUR_TITLES, STANDARD_COLOR,
+                            TEST_SCHEDULER, TURNOVER_COLOR,
                             WINDOW_DAYS, months_in_window, scheduler_for,
                             timezone_for, window_bounds)
 from sheet_merge import norm_city
@@ -275,9 +275,15 @@ def main(argv=None) -> int:
           f"the map knows {sum(len(v) for v in card_map.values())} of them "
           f"across {len(card_map)} booking(s).")
 
+    # Adoption by slot is for the TEST board only. On a market board the only
+    # cards we may modify are ones we created and recorded -- see plan().
+    adopt_here = str(board) == str(TEST_SCHEDULER)
+    if not adopt_here:
+        print(f"   board {board} is a market board: adoption is OFF, so only "
+              f"cards this system created and recorded can be changed.")
     updates, creates, greys, new_map = plan(
-        [(c, p) for _r, c, p in desired], on_board, card_map,
-        our_titles=(STANDARD_TITLE, TURNOVER_TITLE),
+        [(c, p) for _r, c, p in desired], on_board, card_map, adopt=adopt_here,
+        our_titles=OUR_TITLES,
         our_colors=(STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR),
         stale_color=CANCELLED_COLOR if grey_cancellations else None)
 

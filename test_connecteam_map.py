@@ -7,9 +7,9 @@ import datetime as dt
 
 import pandas as pd
 
-from connecteam_map import (DEFAULT_CLEAN_HOURS, STANDARD_COLOR, TURNOVER_COLOR,
-                            shift_for_row, shift_title, shifts_for_rows,
-                            timezone_for)
+from connecteam_map import (DEFAULT_CLEAN_HOURS, STANDARD_COLOR, STANDARD_TITLE,
+                            TURNOVER_COLOR, TURNOVER_TITLE, shift_for_row,
+                            shift_title, shifts_for_rows, timezone_for)
 
 
 def _row(**over):
@@ -101,12 +101,39 @@ def test_the_title_says_the_kind_of_job_not_the_place():
     with an empty title and one with no title key at all, both tried against the
     API that day. So it says what kind of job this is."""
     for row in (_row(), _row(**{"Adjustments": "ECO"})):
-        assert shift_title(row) == "Clean", shift_title(row)
-        assert shift_for_row(row)["title"] == "Clean"
+        assert shift_title(row) == STANDARD_TITLE, shift_title(row)
+        assert shift_for_row(row)["title"] == STANDARD_TITLE
     for row in (_row(**{"T/O": "yes"}),
                 _row(**{"T/O": "yes", "Adjustments": "ECO, LCI"})):
-        assert shift_title(row) == "Turnover", shift_title(row)
+        assert shift_title(row) == TURNOVER_TITLE, shift_title(row)
     print("OK: the title is the kind of job; the property is the Job it points at")
+
+
+def test_the_titles_are_the_words_chris_asked_for():
+    """Pinned to the exact strings, 2026-10-07, so a change is deliberate.
+
+    The green cards read the crews' own phrase for an ordinary departure clean,
+    which is what they already write on their own Austin cards. The turnover
+    title stays English: its Spanish counterpart differs by the single word "no",
+    which is easy to misread at a glance, and the blue cards are the ones it
+    costs most to misread.
+    """
+    assert STANDARD_TITLE == "sale no entran huespedes", STANDARD_TITLE
+    assert TURNOVER_TITLE == "Turnover", TURNOVER_TITLE
+    assert STANDARD_TITLE != TURNOVER_TITLE
+    print(f"OK: green = {STANDARD_TITLE!r}, blue = {TURNOVER_TITLE!r}")
+
+
+def test_an_old_title_is_still_recognised_as_ours():
+    """Renaming the standard title would otherwise orphan every card already on
+    a board -- unrecognisable, so never adopted, never corrected, and on the test
+    board greyed as "no booking claims this"."""
+    from connecteam_map import LEGACY_TITLES, OUR_TITLES
+    assert "Clean" in LEGACY_TITLES, LEGACY_TITLES
+    assert "Clean" in OUR_TITLES, OUR_TITLES
+    for t in (STANDARD_TITLE, TURNOVER_TITLE):
+        assert t in OUR_TITLES, t
+    print(f"OK: {len(OUR_TITLES)} titles count as ours, old names included")
 
 
 def test_the_card_is_a_short_block_not_a_working_window():
@@ -390,6 +417,8 @@ if __name__ == "__main__":
     test_the_test_board_is_not_a_live_one()
     test_cities_resolve_to_their_own_timezone()
     test_the_title_says_the_kind_of_job_not_the_place()
+    test_the_titles_are_the_words_chris_asked_for()
+    test_an_old_title_is_still_recognised_as_ours()
     test_the_card_is_a_short_block_not_a_working_window()
     test_no_job_index_means_no_jobId_rather_than_a_card_without_a_property()
     test_a_property_with_no_job_produces_no_card()

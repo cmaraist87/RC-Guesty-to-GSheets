@@ -226,7 +226,7 @@ def ours(shift, our_titles=(), our_colors=()) -> bool:
 
 
 def plan(desired, board, card_map, our_titles=(), stale_color=None,
-         our_colors=()):
+         our_colors=(), adopt=True):
     """What to do to the board. Pure, so every branch is testable offline.
 
     desired  : [(code, payload)] -- every card the sheet wants in the window
@@ -268,8 +268,21 @@ def plan(desired, board, card_map, our_titles=(), stale_color=None,
     # the code and not an observation about today's data: every card that can be
     # MOVED, RECOLOURED or GREYED below comes from this dict, and this dict holds
     # only cards the map already recorded or cards that pass both tests.
+    #
+    # `adopt=False` turns this off entirely, and a MARKET board passes that. The
+    # title test stopped separating us from the team on 2026-10-07, when Chris
+    # asked for the green cards to read "sale no entran huespedes" -- which is
+    # exactly what four of the team's own Austin cards say. That left colour as
+    # the only thing telling us apart, and a crew tinting a card green would have
+    # been enough to lose it.
+    #
+    # With adoption off, the ONLY cards a market board can modify are ones this
+    # system created and recorded in the map itself. That is a harder guarantee
+    # than the two tests ever gave, and it costs nothing: a card we did not
+    # create is not ours to move, and create_shifts still skips its slot so
+    # nothing is duplicated.
     by_slot: dict = {}
-    for s in board:
+    for s in (board if adopt else []):
         if str(s.get("id")) in claimed:
             continue
         if not ours(s, our_titles, our_colors):
@@ -310,10 +323,16 @@ def plan(desired, board, card_map, our_titles=(), stale_color=None,
 
     greys = []
     if stale_color:
+        recorded = {str(v) for vs in card_map.values() for v in vs}
         for s in board:
             if str(s.get("id")) in claimed:
                 continue
             if not ours(s, our_titles, our_colors):
+                continue
+            if not adopt and str(s.get("id")) not in recorded:
+                # Adoption is off, so this card is not known to be ours. If we
+                # will not MOVE an unrecognised card we must not REPAINT one
+                # either -- the two have to answer to the same evidence.
                 continue                  # the team's own card; not ours to touch
             if str(s.get("color") or "").upper() == stale_color.upper():
                 continue                  # already grey
