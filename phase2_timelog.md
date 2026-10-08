@@ -94,11 +94,13 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-08 | 0.0 | **ABSORBED -- my error.** The switch controlling which boards grey their cancellations silently stopped reaching the colour when the push was rewritten for booking identity on 2026-10-06. It kept governing the "removed booking" path only, so the live Savannah run printed "cancellations are NOT greyed there" and greyed six cards. Austin had not shown it, having no cancelled booking in its window. Chris then clarified that the restriction had been about staying in the test environment, not about the colour, so the switch is gone rather than repaired -- a switch that is always open is one more thing to break, and this one failed by reporting the opposite of what it did. The first version of the verification report had the same shape of fault: it listed sixteen grey cards on a board holding six, having skipped the check that decides whether a card exists at all. | ✅ |
 
-**Total to date: 32.5 h**
+| 2026-10-08 | 0.5 | **Savannah completed: all 21 missing properties created in Connecteam, then the cards they unlocked pushed.** The 21 went in cleanly with no name collisions -- 31 Congress 200 through 304, the 105 E and E Harris addresses, 311 W York, 411 E Park, the Montgomerys and 2 Ashlyn. They turned out to be carrying **131 of Savannah's 301 cleans, 43 per cent**, so the board had been a little over half covered: the warning was worth making and the figure worth having before the team relied on it. Board now 301 cards, every property resolving, 206 green / 79 blue / 16 grey with colour and title corresponding exactly. | ✅ |
+
+**Total to date: 33.0 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 16.0 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 16.5 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -127,6 +129,7 @@ before.
 | 2026-10-07 Austin widened to 45 days | 0.25 |
 | 2026-10-08 **Savannah live** -- 170 cards from 12 Oct | 0.75 |
 | 2026-10-08 cancelled-card verification report | 0.25 |
+| 2026-10-08 Savannah's 21 properties set up, cards pushed | 0.5 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
