@@ -43,8 +43,20 @@ def _refused(city, capsys_free=True):
     return REFUSAL in err.getvalue(), rc
 
 
+def test_thunderbolt_is_not_live_merely_because_it_shares_a_board():
+    """Savannah and Thunderbolt share board 10540737. Signing Savannah off does
+    not sign Thunderbolt off, even though the cards land in the same place --
+    they are separate markets with separate rows, and the gate is per CITY for
+    exactly this reason."""
+    assert "thunderbolt" not in LIVE_MARKETS, LIVE_MARKETS
+    assert CITY_SCHEDULERS["thunderbolt"] == CITY_SCHEDULERS["savannah"],         "these two are expected to share a board; if not, this test is stale"
+    hit, rc = _refused("Thunderbolt")
+    assert hit and rc == 2, ("Thunderbolt was not refused", rc)
+    print("OK: sharing a board with a live market does not make you live")
+
+
 def test_only_the_signed_off_markets_are_live():
-    assert LIVE_MARKETS == frozenset({"austin"}), (
+    assert LIVE_MARKETS == frozenset({"austin", "savannah"}), (
         f"LIVE_MARKETS is {set(LIVE_MARKETS)}. Every name in it can write to a "
         f"real crew board, so each one needs Chris saying so unprompted.")
     print(f"OK: signed off = {sorted(LIVE_MARKETS)}")
@@ -134,6 +146,7 @@ def test_greying_is_still_test_board_only():
 
 if __name__ == "__main__":
     test_only_the_signed_off_markets_are_live()
+    test_thunderbolt_is_not_live_merely_because_it_shares_a_board()
     test_every_market_that_is_not_signed_off_is_refused()
     test_a_signed_off_market_is_not_refused_by_the_gate()
     test_the_workflow_cannot_grant_what_the_code_withholds()

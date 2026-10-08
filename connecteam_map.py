@@ -151,7 +151,12 @@ CANCELLED_COLOR_BOARDS = frozenset({TEST_SCHEDULER})
 # acceptable, read the answer as standing permission, and put 38 cards on a real
 # crew board. They were deleted the same day. That is why this is a deliberate
 # edit to a named set rather than a flag anybody can pass.
-LIVE_MARKETS = frozenset({"austin"})
+# Savannah added 2026-10-08, on Chris' call after the team reported Austin
+# working. Thunderbolt shares its board (10540737) and is deliberately NOT here:
+# it has one property, that property has no Job, and so it produces no card at
+# all. Signing off a market that sends nothing would be a sign-off granted for
+# no reason and remembered as one that was given.
+LIVE_MARKETS = frozenset({"austin", "savannah"})
 
 # How far ahead cards exist. Chris' call on 2026-10-06: a ROLLING 45 days from
 # today, not a calendar range.
