@@ -227,10 +227,14 @@ jobs:
           # preceded it, which makes a failure far harder to read than it is.
           python -u sync.py $DRY $SCHED
 
-      # Raise the Connecteam cards for the markets that are ready, straight after
-      # the sheet is written. CHRIS TEST ONLY: connecteam_push refuses --live
-      # without --test, in code, and this step cannot reach a crew board however
-      # it is invoked.
+      # Raise the Connecteam cards straight after the sheet is written.
+      #
+      # THE NIGHTLY STAYS ON CHRIS TEST, even though Austin was signed off for
+      # live writes on 2026-10-07. Those are two different things: Austin's first
+      # cards are a deliberate, watched push, and an automatic job is not the
+      # place to find out whether the day went well. This step passes --test, so
+      # it cannot reach a crew board however it is invoked; moving the nightly
+      # onto a market board is a later, separate decision.
       #
       # NOT on the 22 scheduled crons. Only one of them actually syncs -- the rest
       # ask shared state, find the day already claimed, and stand down -- so

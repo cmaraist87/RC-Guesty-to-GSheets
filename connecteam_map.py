@@ -137,6 +137,22 @@ CANCELLED_COLOR = "#969696"    # light gray: the booking was cancelled
 # this set is where it gets made -- not something that arrives with the first.
 CANCELLED_COLOR_BOARDS = frozenset({TEST_SCHEDULER})
 
+# THE SIGN-OFF. Markets whose own board may receive cards.
+#
+# Chris signed Austin off on 2026-10-07, in answer to a question that named the
+# board, the window and the card count. Everything else stays shut.
+#
+# A set, not a boolean, so switching one market on cannot switch the rest on by
+# accident -- and so the question "who is live?" has one answer, in one place,
+# that a test can read. Adding a name here is the whole of a go-live; nothing
+# else grants it, and no workflow input can.
+#
+# What came before: on 2026-09-21 I asked whether a live Austin write was
+# acceptable, read the answer as standing permission, and put 38 cards on a real
+# crew board. They were deleted the same day. That is why this is a deliberate
+# edit to a named set rather than a flag anybody can pass.
+LIVE_MARKETS = frozenset({"austin"})
+
 # How far ahead cards exist. Chris' call on 2026-10-06: a ROLLING 45 days from
 # today, not a calendar range.
 #

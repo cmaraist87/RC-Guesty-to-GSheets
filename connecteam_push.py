@@ -26,7 +26,7 @@ from connecteam_cards import (booking_activity, cards_for_tab, plan,
                               read_map, write_map, write_snapshot)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, CANCELLED_COLOR_BOARDS,
-                            CITY_SCHEDULERS, STANDARD_COLOR, STANDARD_TITLE,
+                            CITY_SCHEDULERS, LIVE_MARKETS, STANDARD_COLOR, STANDARD_TITLE,
                             TEST_SCHEDULER, TURNOVER_COLOR, TURNOVER_TITLE,
                             WINDOW_DAYS, months_in_window, scheduler_for,
                             timezone_for, window_bounds)
@@ -67,13 +67,21 @@ def main(argv=None) -> int:
     # picked, and a rule in a comment is worth nothing at all. So the market
     # boards are unreachable from every entry point until this branch is
     # deliberately removed -- which is what "signs off" has to mean.
-    if args.live and not args.test:
-        print("REFUSED: --live is only allowed with --test.", file=sys.stderr)
-        print("         Cards go to Chris Test and nowhere else until Chris "
-              "signs off on writing to a market board.", file=sys.stderr)
-        print("         Removing this check is that sign-off; nothing else is.",
+    # Austin was signed off on 2026-10-07; the other four are not. The gate is a
+    # named set in connecteam_map, so turning one market on cannot turn the rest
+    # on with it.
+    if args.live and not args.test and norm_city(args.city) not in LIVE_MARKETS:
+        print(f"REFUSED: {args.city} is not signed off for live writes.",
               file=sys.stderr)
+        print(f"         Signed off so far: "
+              f"{', '.join(sorted(LIVE_MARKETS)) or '(none)'}.", file=sys.stderr)
+        print("         Everything else goes to Chris Test with --test. Adding a "
+              "market to LIVE_MARKETS is the whole of a go-live; no workflow "
+              "input grants it.", file=sys.stderr)
         return 2
+    if args.live and not args.test:
+        print(f"LIVE MARKET BOARD: {args.city} is signed off, so cards go to its "
+              f"OWN board, which crews see.")
 
     board = scheduler_for(args.city)
     if board is None:
