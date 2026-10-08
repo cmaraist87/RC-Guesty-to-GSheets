@@ -232,9 +232,25 @@ def main(argv=None) -> int:
     # Every property that produced no card, and why. These are the ones the team
     # has to create in Connecteam before their cleans can reach anybody.
     if unmatched:
+        # How many CLEANS are lost, not just how many properties. "21 properties
+        # have no Job" sounds like a tidy-up; "71 cleans are not being sent"
+        # is the same fact and is the one that decides whether a board is fit to
+        # go live.
+        lost = 0
+        for title, frame, struck in read_tabs:
+            if not len(frame) or "City" not in frame.columns:
+                continue
+            mine = frame[frame["City"].map(norm_city) == norm_city(args.city)]
+            for _i, r in mine.iterrows():
+                if str(r.get("Property", "")).strip() not in unmatched:
+                    continue
+                if not str(r.get("Check out - Time", "")
+                           or r.get("Check-out Time", "")).strip():
+                    continue
+                lost += 1
         print("")
         print(f"  {len(unmatched)} propertie(s) have NO Job on this board, so "
-              f"their cleans are not being sent:")
+              f"{lost} clean(s) in this window are NOT being sent, silently:")
         for prop in sorted(unmatched):
             print(f"     {prop}")
         print("  Create these as Jobs in Connecteam and they are picked up "
