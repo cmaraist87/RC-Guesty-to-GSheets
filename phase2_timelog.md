@@ -78,11 +78,15 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.5 | **The two things that were unproven, proven on the test board.** (1) The UNDO actually run for the first time: deleted 14 cards, let the push recreate them and take its snapshot, then restored from that snapshot -- 14 of 14 removed, confirmed by reading the board back, and it identified exactly the cards the push had created and nothing else. (2) A card going GREEN to GREY because its booking was cancelled, which the sheet cannot produce on its own because cancellations already have grey cards; staged with a new test-board-only paint tool and watched the push correct both cards. That exposed one more fault on the way: adoption keyed on the card's TITLE, which a booking changes when a clean becomes a turnover, so such a card was greyed as 'no booking claims this' and a second one created beside it. Keyed on property and instant now; one update instead of a ghost and a duplicate. Board left consistent at 100 cards -- 78 Clean (76 green, 2 grey) and 22 Turnover, all blue. | ✅ |
 
-**Total to date: 29.5 h**
+| 2026-10-07 | 0.75 | **AUSTIN LIVE.** First cards on a real crew board, with Chris' sign-off against a question that named the board, the window and the count. Deliberately small: a 3-day window, 4 cards. Built the sign-off as a named SET in code rather than a flag, so switching one market on cannot switch the rest on with it -- New Orleans, Savannah, Thunderbolt and Bay St. Louis are still refused by name, and the nightly stays on Chris Test because an unattended job is not where you learn whether the day went well. Verified on the board afterwards: 10 cards, the team's 6 byte-identical to before (same Jobs, same times, same titles, still no colour) and our 4 green and Unassigned. A before-snapshot and the card map were both stored, so the undo proven earlier applies to this board too. | ✅ |
+
+| 2026-10-07 | 0.0 | **ABSORBED -- my errors.** The lock test kept PASSING after Austin was signed off, because it only checked the exit code and Austin exits 2 as well with no local API key; rewritten to identify the refusal by its message, and to assert separately that a signed-off market is NOT refused, since a sign-off that silently does nothing is its own failure. Then an escaped apostrophe in a workflow echo broke the generated shell block so the first preview did nothing and reported exit 2 -- the second time that quoting has bitten this file, now checked with `bash -n` on the generated block, because YAML validity says nothing about the shell inside it. | ✅ |
+
+**Total to date: 30.25 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 13.0 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 13.75 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -105,6 +109,7 @@ before.
 | 2026-10-07 nightly automation **[reliability]** | 0.5 |
 | 2026-10-07 1401 Carondelet merged workbook-wide | 0.5 |
 | 2026-10-07 undo and grey transition proven live | 0.5 |
+| 2026-10-07 **Austin live** -- first crew-board cards | 0.75 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
