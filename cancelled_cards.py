@@ -73,6 +73,25 @@ def main(argv=None) -> int:
         print("No tabs in that window.")
         return 0
 
+    # The Job index, because a cancelled clean at a property with NO Job never
+    # became a card at all. Without this the report counted sixteen "grey cards"
+    # on a board that holds six -- ten of them at 311 W York, 31 Congress and
+    # 2 Ashlyn, none of which has a Job. A report that does not match the board
+    # is worse than none when the question is "is what I am looking at right?".
+    import os
+    from connecteam_client import ConnecteamClient, ConnecteamError, check_api_key
+    from connecteam_jobs import build_index
+    job_index = None
+    try:
+        client = ConnecteamClient(
+            check_api_key(os.environ.get("CONNECTEAM_API_KEY", "")))
+        all_jobs, _how = client.list_jobs(board)
+        job_index = build_index(all_jobs, board=board)
+    except ConnecteamError as e:
+        print(f"WARNING: could not read the board's Jobs ({e}).", file=sys.stderr)
+        print("         Listing every cancelled CLEAN instead, including ones "
+              "that have no card.", file=sys.stderr)
+
     active = booking_activity([(f, st) for _t, f, st in read_tabs])
     dead = sum(1 for v in active.values() if not v)
     print(f"{len(active)} booking(s) across {len(read_tabs)} tab(s); "
@@ -85,6 +104,7 @@ def main(argv=None) -> int:
             continue
         mine = frame[frame["City"].map(norm_city) == norm_city(args.city)]
         for row, code, payload in cards_for_tab(mine, struck, active,
+                                                job_index=job_index,
                                                 grey_cancellations=True):
             if not (lo <= int(payload["startTime"]) <= hi):
                 continue
@@ -100,13 +120,14 @@ def main(argv=None) -> int:
         print("No grey cards in this window: no cancelled booking has one.")
         return 0
 
-    print(f"{len(rows)} grey card(s) -- every row for these codes is struck, and "
-          f"none appears live anywhere:")
+    what = "grey card(s) on the board" if job_index is not None else            "cancelled clean(s), some with no card because the property has no Job"
+    print(f"{len(rows)} {what} -- every row for these codes is struck, and none "
+          f"appears live anywhere:")
     print("")
-    print(f"  {'date':<12}{'code':<14}{'property':<26}{'check-out':<11}guest")
-    print("  " + "-" * 74)
+    print(f"  {'date':<12}{'code':<28}{'property':<24}{'out':<10}guest")
+    print("  " + "-" * 86)
     for _tab, d, code, prop, guest, out in sorted(rows):
-        print(f"  {d:<12}{code:<14}{prop[:25]:<26}{out:<11}{guest[:22]}")
+        print(f"  {d:<12}{code[:27]:<28}{prop[:23]:<24}{out:<10}{guest[:20]}")
     print("")
     print("  Check these codes in Guesty. If any is NOT cancelled, say so and "
           "the colour is wrong -- the booking would be live and shown as dead.")
