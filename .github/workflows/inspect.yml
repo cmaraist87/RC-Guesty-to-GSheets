@@ -80,6 +80,11 @@ on:
           - Bay St. Louis
           - Savannah
           - Thunderbolt
+      start:
+        description: "connecteam: do not card anything before this date (YYYY-MM-DD). A floor, so it expires once reached."
+        required: false
+        default: ""
+        type: string
       days:
         description: "connecteam: rolling window depth in days (blank = 45). Use a small number for a cautious first push."
         required: false
@@ -175,6 +180,7 @@ jobs:
               # glance and removed with one command.
               DAYS=""
               if [ -n "${{ inputs.days }}" ]; then DAYS="--days ${{ inputs.days }}"; fi
+              if [ -n "${{ inputs.start }}" ]; then DAYS="$DAYS --start ${{ inputs.start }}"; fi
               # Chris Test or nothing. Cards go to a market board only once Chris
               # has signed off, and that sign-off is a code change, not an input
               # here: connecteam_push refuses --live without --test.

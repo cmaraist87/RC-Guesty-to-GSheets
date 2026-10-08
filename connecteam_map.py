@@ -168,10 +168,22 @@ LIVE_MARKETS = frozenset({"austin"})
 WINDOW_DAYS = 45
 
 
-def window_bounds(today, days: int = WINDOW_DAYS):
-    """(first date, last date) inclusive, for a rolling window from `today`."""
+def window_bounds(today, days: int = WINDOW_DAYS, start=None):
+    """(first date, last date) inclusive, for a rolling window from `today`.
+
+    `start` is a FLOOR, not a fixed start. The window begins at whichever of the
+    two is later, and the far edge stays at today + days.
+
+    A floor rather than a fixed date because it is meant to expire. Chris asked on
+    2026-10-08 to begin Savannah's cards on Monday 12 October, so as not to
+    duplicate the few days the team had already carded by hand. Once the 12th has
+    passed that reason is gone, and a fixed start would quietly keep truncating
+    the window from the front for ever -- shrinking the horizon by a day every day
+    until it vanished.
+    """
     from datetime import timedelta
-    return today, today + timedelta(days=days)
+    first = today if start is None else max(today, start)
+    return first, today + timedelta(days=days)
 
 
 def months_in_window(first, last) -> list:

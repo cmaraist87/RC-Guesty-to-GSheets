@@ -75,11 +75,45 @@ def test_months_in_window_never_builds_an_invalid_date():
 
 
 
+def test_a_start_floor_moves_the_first_day_but_not_the_last():
+    """Chris asked on 2026-10-08 for Savannah's cards to begin Monday the 12th,
+    so the days the team had already carded by hand were left alone."""
+    first, last = window_bounds(date(2026, 10, 8), 45, date(2026, 10, 12))
+    assert first == date(2026, 10, 12), first
+    assert last == date(2026, 11, 22), last
+    print(f"OK: a floor moves the start to {first}, far edge still {last}")
+
+
+def test_a_floor_that_has_passed_does_nothing():
+    """A FLOOR, not a fixed start. A fixed date would keep truncating the window
+    from the front for ever -- shrinking the horizon a day at a time -- long
+    after the reason for it had gone."""
+    for today in (date(2026, 10, 12), date(2026, 10, 13), date(2027, 1, 1)):
+        first, _last = window_bounds(today, 45, date(2026, 10, 12))
+        assert first == today, (today, first)
+    print("OK: once the floor is reached it stops restricting anything")
+
+
+def test_a_floor_never_shortens_the_horizon():
+    """The far edge is today + days whatever the floor says, so the depth of
+    coverage is never traded away for a later start."""
+    for n in range(0, 20):
+        today = date(2026, 10, 1) + timedelta(days=n)
+        first, last = window_bounds(today, 45, date(2026, 10, 12))
+        assert last == today + timedelta(days=45), (today, last)
+        assert first >= today, (today, first)
+        assert first <= last, (today, first, last)
+    print("OK: the far edge is unaffected by the floor, every day for 20 days")
+
+
 if __name__ == "__main__":
     test_the_window_is_45_rolling_days()
     test_the_window_never_shrinks_at_month_end()
     test_the_window_spans_two_tabs_and_sometimes_three()
     test_the_window_crosses_a_year()
     test_months_in_window_never_builds_an_invalid_date()
+    test_a_start_floor_moves_the_first_day_but_not_the_last()
+    test_a_floor_that_has_passed_does_nothing()
+    test_a_floor_never_shortens_the_horizon()
     print("")
     print("ALL PUSH-WINDOW TESTS PASSED")

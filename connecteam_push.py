@@ -44,6 +44,10 @@ def main(argv=None) -> int:
     ap.add_argument("--month", default=None, metavar="YYYY-MM",
                     help="Pin to ONE calendar month instead of the rolling "
                          "window. For a backfill or a demo, by hand.")
+    ap.add_argument("--start", default="", metavar="YYYY-MM-DD",
+                    help="do not card anything before this date. A FLOOR, not a "
+                         "fixed start: once the date has passed it has no effect, "
+                         "so the window cannot keep shrinking from the front.")
     ap.add_argument("--days", type=int, default=WINDOW_DAYS, metavar="N",
                     help=f"Rolling window depth in days (default {WINDOW_DAYS}). "
                          f"Also the slice of the board that gets reconciled.")
@@ -118,9 +122,20 @@ def main(argv=None) -> int:
         last = date(y + (m == 12), 1 if m == 12 else m + 1, 1) - timedelta(days=1)
         print(f"WINDOW: the whole of {args.month} ({first} to {last}), by --month.")
     else:
-        first, last = window_bounds(today, args.days)
+        floor = None
+        if args.start:
+            floor = date(int(args.start[:4]), int(args.start[5:7]),
+                         int(args.start[8:10]))
+        first, last = window_bounds(today, args.days, floor)
         print(f"WINDOW: rolling {args.days} days, {first} to {last} "
               f"(today is {today}).")
+        if floor:
+            if floor > today:
+                print(f"        starting no earlier than {floor}, so the days "
+                      f"the team has already carded by hand are left alone.")
+            else:
+                print(f"        --start {floor} has passed; it no longer "
+                      f"restricts anything.")
 
     tz = ZoneInfo(timezone_for(args.city))
     lo = int(datetime.combine(first, time(0, 0), tzinfo=tz).timestamp())
