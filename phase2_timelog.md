@@ -82,11 +82,15 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-07 | 0.0 | **ABSORBED -- my errors.** The lock test kept PASSING after Austin was signed off, because it only checked the exit code and Austin exits 2 as well with no local API key; rewritten to identify the refusal by its message, and to assert separately that a signed-off market is NOT refused, since a sign-off that silently does nothing is its own failure. Then an escaped apostrophe in a workflow echo broke the generated shell block so the first preview did nothing and reported exit 2 -- the second time that quoting has bitten this file, now checked with `bash -n` on the generated block, because YAML validity says nothing about the shell inside it. | ✅ |
 
-**Total to date: 30.25 h**
+| 2026-10-07 | 0.75 | **Two card changes Chris asked for.** (1) The green cards now read the crews' own phrase for a departure with nobody arriving, "sale no entran huespedes", matching what the team writes on their own Austin cards; the turnover title stays English on his call, because its Spanish counterpart differs by the single word "no" and the blue cards are the ones it costs most to misread. Applied to Chris Test: 49 of 49 retitled, confirmed by reading the board back, and the board now reads 49 green / 49 "sale no entran huespedes" and 18 blue / 18 "Turnover" exactly. (2) The Job field now shows just the address. That turned out NOT to be a rename: this account holds two Jobs for most addresses -- a clean-named one the CREWS use and a "V2" one -- and the matcher was taking the highest version, so our card sat on a different Job row from theirs for the same door. Preferring the unversioned Job gives the address, writes to nothing, and puts our cards on the Job the team already uses. The rename reading would have been account-wide, untestable on one board, and was blocked for 8 of 11 by the very Jobs the team holds. | ✅ |
+
+| 2026-10-07 | 0.25 | **[reliability]** Closed the hole the first change opened. Our green title is now identical to four of the team's Austin cards, so the title half of the two-test ownership rail stopped separating us from them and left colour alone -- a crew tinting a card green would have been enough to lose it. A market board now adopts nothing by slot: the only cards it can move, recolour or grey are ones this system created and recorded in its own map, which is a harder guarantee than the two tests gave and costs nothing. The grey pass answers to the same evidence, because a card we will not move is a card we must not repaint. | ✅ |
+
+**Total to date: 31.25 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 13.75 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 14.75 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -110,6 +114,8 @@ before.
 | 2026-10-07 1401 Carondelet merged workbook-wide | 0.5 |
 | 2026-10-07 undo and grey transition proven live | 0.5 |
 | 2026-10-07 **Austin live** -- first crew-board cards | 0.75 |
+| 2026-10-07 card title and Job field changes | 0.75 |
+| 2026-10-07 market boards adopt nothing **[reliability]** | 0.25 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
