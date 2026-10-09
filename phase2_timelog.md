@@ -96,11 +96,13 @@ marked so the two can be separated at invoice time.
 
 | 2026-10-08 | 0.5 | **Savannah completed: all 21 missing properties created in Connecteam, then the cards they unlocked pushed.** The 21 went in cleanly with no name collisions -- 31 Congress 200 through 304, the 105 E and E Harris addresses, 311 W York, 411 E Park, the Montgomerys and 2 Ashlyn. They turned out to be carrying **131 of Savannah's 301 cleans, 43 per cent**, so the board had been a little over half covered: the warning was worth making and the figure worth having before the team relied on it. Board now 301 cards, every property resolving, 206 green / 79 blue / 16 grey with colour and title corresponding exactly. | ✅ |
 
-**Total to date: 33.0 h**
+| 2026-10-08 | 0.75 | **[reliability]** **Risk work, prompted by Chris asking what could be reduced -- and it found one I had created hours earlier.** Turning adoption off for market boards is what makes "the team's cards cannot be touched" true by construction, but it made the system depend on a single JSON object in a bucket: lose it and a live board FREEZES SILENTLY, no card ever moved, recoloured or greyed again, a cancelled booking keeping a green card, and nothing complaining because the create step reports the slot already occupied. Demonstrated rather than assumed, then mitigated three ways -- an alarm that names any card of ours the map does not know and says plainly it can no longer be corrected; a dated archive of the map, since it was one object rewritten every run; and `card_lookup`, which answers "which card is this sheet row?", prints the id in BOTH forms the API needs, and says plainly when a booking has no card at all with the four reasons that happens. Also pinned a test I should have had yesterday: every shell block in both workflows must pass `bash -n`, after two valid-YAML workflows whose generated scripts would not parse. | ✅ |
+
+**Total to date: 33.75 h**
 
 *Invoiced: RCI-2026-02 (12.0 h) and RCI-2026-03 (4.5 h) = 16.5 h.*
 
-**Held for final billing: 16.5 h.** Chris' instruction on 2026-10-06 — account for
+**Held for final billing: 17.25 h.** Chris' instruction on 2026-10-06 — account for
 these now, invoice them once the Connecteam integration is complete, as one
 closing invoice rather than a third interim one. The 15% family rate applies as
 before.
@@ -130,6 +132,7 @@ before.
 | 2026-10-08 **Savannah live** -- 170 cards from 12 Oct | 0.75 |
 | 2026-10-08 cancelled-card verification report | 0.25 |
 | 2026-10-08 Savannah's 21 properties set up, cards pushed | 0.5 |
+| 2026-10-08 lost-map risk, alarm, archive, lookup **[reliability]** | 0.75 |
 
 Still to come before that invoice closes: the rolling push window, reconciling the
 board against the sheet (a vanished booking currently leaves its card for ever),
