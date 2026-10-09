@@ -119,10 +119,49 @@ def test_the_push_really_runs_as_a_command():
     print(f"OK: the push starts and says why it cannot run ({first}...)")
 
 
+def test_every_shell_block_in_every_workflow_parses():
+    """YAML being valid says nothing about the shell inside it.
+
+    Twice on 2026-10-07 a workflow was valid YAML and the generated script would
+    not parse: an escaped apostrophe in an echo broke the whole block, so a
+    preview ran nothing and reported exit 2 while looking like a clean run. The
+    GitHub UI gives no warning for this; the job fails at the first line.
+
+    `bash -n` parses without executing, which is the check that was missing. The
+    ${{ }} expressions become a literal first: their values are unknown here and
+    are not what is being tested.
+    """
+    import re
+
+    import yaml
+
+    blocks = []
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
+        d = yaml.safe_load(io.open(wf, encoding="utf-8").read())
+        for job in (d.get("jobs") or {}).values():
+            for st in job.get("steps", []):
+                if isinstance(st.get("run"), str):
+                    blocks.append((wf.name, st.get("name", "(unnamed)"),
+                                   st["run"]))
+    assert blocks, "no run blocks found; this test would pass vacuously"
+
+    bad = []
+    for wf, name, block in blocks:
+        sh = re.sub(r"\$\{\{[^}]*\}\}", "X", block)
+        p = subprocess.run(["bash", "-n"], input=sh, text=True,
+                           capture_output=True, timeout=60)
+        if p.returncode != 0:
+            first = (p.stderr.strip().splitlines() or ["?"])[0]
+            bad.append(f"{wf} / {name}: {first[:120]}")
+    assert not bad, "shell blocks that do not parse: " + "; ".join(bad)
+    print(f"OK: all {len(blocks)} shell block(s) across the workflows parse")
+
+
 if __name__ == "__main__":
     test_the_workflows_reference_real_files()
     test_every_tool_has_an_entry_point()
     test_every_tool_imports()
     test_the_push_really_runs_as_a_command()
+    test_every_shell_block_in_every_workflow_parses()
     print("")
     print("ALL TOOL-RUNNABILITY TESTS PASSED")
