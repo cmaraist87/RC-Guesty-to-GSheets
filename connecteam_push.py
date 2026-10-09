@@ -22,8 +22,8 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from connecteam_client import ConnecteamClient, ConnecteamError
-from connecteam_cards import (booking_activity, cards_for_tab, plan,
-                              read_map, write_map, write_snapshot)
+from connecteam_cards import (booking_activity, cards_for_tab, orphans,
+                              plan, read_map, write_map, write_snapshot)
 from connecteam_jobs import build_index, resolve, usable
 from connecteam_map import (CANCELLED_COLOR, GREY_CANCELLATIONS_EVERYWHERE,
                             CITY_SCHEDULERS, LIVE_MARKETS, OUR_TITLES, STANDARD_COLOR,
@@ -312,6 +312,29 @@ def main(argv=None) -> int:
     if not adopt_here:
         print(f"   board {board} is a market board: adoption is OFF, so only "
               f"cards this system created and recorded can be changed.")
+    # THE LOST-MAP ALARM. A card of ours that the map does not know can never be
+    # corrected on a market board, and nothing downstream would say so.
+    stranded = orphans(on_board, card_map, OUR_TITLES,
+                       (STANDARD_COLOR, TURNOVER_COLOR, CANCELLED_COLOR))
+    if stranded:
+        print("")
+        print(f"   !! {len(stranded)} card(s) on this board look like ours but "
+              f"are in no map entry.")
+        if adopt_here:
+            print(f"      This board adopts by slot, so they will be recovered "
+                  f"below and recorded.")
+        else:
+            print(f"      This board does NOT adopt, so they cannot be moved, "
+                  f"recoloured or greyed -- a cancelled booking among them would "
+                  f"keep a green card. Restore the card map, or run with the "
+                  f"test board to re-derive it.")
+            for s2 in stranded[:10]:
+                print(f"      {str(s2.get('id'))[:28]}  {s2.get('title')!r}  "
+                      f"{s2.get('color')}")
+            if len(stranded) > 10:
+                print(f"      ... and {len(stranded) - 10} more")
+        print("")
+
     updates, creates, greys, new_map = plan(
         [(c, p) for _r, c, p in desired], on_board, card_map, adopt=adopt_here,
         our_titles=OUR_TITLES,

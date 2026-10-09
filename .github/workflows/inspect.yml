@@ -29,6 +29,7 @@ on:
           - job_fields        # what a Job looks like; can we create one?
           - color_palette    # which card colours Connecteam accepts
           - cancelled        # which bookings are grey, and their codes (read-only)
+          - card_lookup      # which card belongs to a booking, and its ids
           - job_create        # CREATE the Jobs the TEST board is missing
           - job_share        # can a Job be added to a second board? (our Job only)
           - job_rename       # strip the Guesty V2 from Job names (ACCOUNT-WIDE)
@@ -216,6 +217,12 @@ jobs:
                 python -u connecteam_push.py --city "${{ inputs.city }}" $MONTH $DAYS
               fi ;;
             schedulers)  python -u connecteam_board.py --schedulers ;;
+            card_lookup)
+              # `code` is a confirmation code; `property` a property name.
+              ARGS3=""
+              if [ -n "${{ inputs.code }}" ]; then ARGS3="--code ${{ inputs.code }}"; fi
+              if [ -n "${{ inputs.property }}" ]; then ARGS3="$ARGS3 --property \"${{ inputs.property }}\""; fi
+              eval python -u card_lookup.py $ARGS3 ;;
             cancelled)
               # `from` doubles as the start floor here.
               START=""

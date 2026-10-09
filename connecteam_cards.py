@@ -356,6 +356,25 @@ def plan(desired, board, card_map, our_titles=(), stale_color=None,
 
 # ------------------------------------------------------- where the map lives
 
+def orphans(board_cards, card_map, our_titles=(), our_colors=()) -> list:
+    """Cards that look like OURS but are in no map entry. A lost-map alarm.
+
+    On a market board adoption is off, so a card we cannot find in the map can
+    never be moved, recoloured or greyed again -- and create_shifts will skip its
+    slot as occupied, so nothing is created either. The card simply stays as it
+    is for ever, and a cancelled booking keeps a green card.
+
+    That is a silent failure, which is the only kind worth building an alarm for.
+    It became possible on 2026-10-08, when turning adoption off for market boards
+    made the system depend on one JSON object in a bucket. This is the check that
+    turns losing it into a visible problem rather than a frozen board.
+    """
+    recorded = {str(v) for vs in (card_map or {}).values() for v in vs}
+    return [s for s in board_cards
+            if ours(s, our_titles, our_colors)
+            and str(s.get("id")) not in recorded]
+
+
 def map_name(board: str) -> str:
     """The state-bucket object holding {code -> card ids} for one board.
 
@@ -396,11 +415,25 @@ def read_map(store, board: str):
 
 
 def write_map(store, board: str, mapping: dict, generation: int) -> bool:
-    """Store the map. False if it could not be written, which is not fatal."""
+    """Store the map, and a dated copy. False if the live one could not be
+    written, which is not fatal.
+
+    The dated copy is never overwritten. The live map is one object rewritten
+    every run, so without an archive a single bad write would be the end of the
+    only record linking bookings to cards -- and on a market board that record is
+    the ONLY thing that lets a card be corrected afterwards.
+    """
     import json
+    from datetime import datetime, timezone
     if store is None:
         return False
     payload = json.dumps(mapping, indent=1, sort_keys=True).encode("utf-8")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    try:
+        store.write(f"connecteam/cards-{board}-{stamp}.json", payload,
+                    if_generation_match=0)
+    except Exception as e:  # noqa: BLE001 - the live map still matters more
+        print(f"   (could not archive the card map: {e})")
     try:
         store.write(map_name(board), payload, if_generation_match=generation)
     except Exception as e:  # noqa: BLE001 - losing the map costs a slot-adoption
